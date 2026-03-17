@@ -1,5 +1,11 @@
 # Changelog
 
+ - 2026-03-17 v1.47.0: Add CGO-free version of the vector extensions from https://github.com/asg017/sqlite-vec. See `vec_test.go` for example usage. From the GitHub project page:
+  - **Important:** sqlite-vec is a pre-v1, so expect breaking changes!
+  - Store and query float, int8, and binary vectors in vec0 virtual tables
+  - Written in pure C, no dependencies, runs anywhere SQLite runs (Linux/MacOS/Windows, in the browser with WASM, Raspberry Pis, etc.)
+  - Store non-vector data in metadata, auxiliary, or partition key columns
+
  - 2026-03-16 v1.46.2: Upgrade to  [SQLite 3.51.3](https://sqlite.org/releaselog/3_51_3.html).
 
  - 2026-02-17 v1.46.1:
