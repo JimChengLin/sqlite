@@ -125,4 +125,97 @@ type Sqlite3_vtab_cursor = sqlite3_vtab_cursor
 			fail(1, "%s\n", err)
 		}
 	}
+
+	{
+		for _, v := range []struct{ goos, goarch string }{
+			{"darwin", "amd64"},
+			{"darwin", "arm64"},
+			{"freebsd", "amd64"},
+			{"freebsd", "arm64"},
+			{"linux", "386"},
+			{"linux", "amd64"},
+			{"linux", "arm"},
+			{"linux", "arm64"},
+			{"linux", "loong64"},
+			{"linux", "ppc64le"},
+			{"linux", "riscv64"},
+			{"linux", "s390x"},
+			{"openbsd", "amd64"},
+			{"openbsd", "arm64"},
+			{"windows", "386"},
+			{"windows", "amd64"},
+		} {
+			base := fmt.Sprintf("ccgo_%s_%s.go", v.goos, v.goarch)
+			if v.goos == "windows" && v.goarch == "amd64" {
+				base = "ccgo_windows.go"
+			}
+			ifn := filepath.Join("..", "libsqlite_vec", base)
+			fmt.Printf("%s/%s\t%s\n", v.goos, v.goarch, ifn)
+			in, err := os.ReadFile(ifn)
+			if err != nil {
+				fail(1, "%s\n", err)
+			}
+
+			ast, err := gc.ParseFile(ifn, in)
+			if err != nil {
+				fail(1, "%s\n", err)
+			}
+
+			b := bytes.NewBuffer(nil)
+			s := ast.SourceFile.PackageClause.Source(true)
+			s = strings.Replace(s, "package libsqlite_vec", "package vec", 1)
+			fmt.Fprintln(b, s)
+			s = ast.SourceFile.ImportDeclList.Source(true)
+			s = strings.Replace(s, `"modernc.org/libsqlite3"`, `libsqlite3 "modernc.org/sqlite/lib"`, 1)
+			fmt.Fprint(b, s)
+			taken := map[string]struct{}{}
+			for n := ast.SourceFile.TopLevelDeclList; n != nil; n = n.List {
+				switch x := n.TopLevelDecl.(type) {
+				case *gc.TypeDeclNode:
+					adn := x.TypeSpecList.TypeSpec.(*gc.AliasDeclNode)
+					nm := adn.IDENT.Src()
+					taken[nm] = struct{}{}
+				}
+			}
+		loopvec:
+			for n := ast.SourceFile.TopLevelDeclList; n != nil; n = n.List {
+				switch x := n.TopLevelDecl.(type) {
+				case *gc.ConstDeclNode:
+					switch y := x.ConstSpec.(type) {
+					case *gc.ConstSpecNode:
+						if y.IDENT.Src() != "SQLITE_TRANSIENT" {
+							fmt.Fprintln(b, x.Source(true))
+						}
+					default:
+						panic(fmt.Sprintf("%v: %T %q", x.Position(), y, x.Source(false)))
+					}
+
+				case *gc.FunctionDeclNode:
+					fmt.Fprintln(b, x.Source(true))
+				case *gc.TypeDeclNode:
+					fmt.Fprintln(b, x.Source(true))
+					adn := x.TypeSpecList.TypeSpec.(*gc.AliasDeclNode)
+					nm := adn.IDENT.Src()
+					nm2 := nm[1:]
+					if _, ok := taken[nm2]; ok {
+						break
+					}
+
+					if token.IsExported(nm) {
+						fmt.Fprintf(b, "\ntype %s = %s\n", nm2, nm)
+					}
+				case *gc.VarDeclNode:
+					fmt.Fprintln(b, x.Source(true))
+				default:
+					fmt.Printf("%v: TODO %T\n", n.Position(), x)
+					break loopvec
+				}
+			}
+
+			base = strings.Replace(base, "ccgo_", "vec_", 1)
+			if err := os.WriteFile(filepath.Join("vec", base), b.Bytes(), 0660); err != nil {
+				fail(1, "%s\n", err)
+			}
+		}
+	}
 }
