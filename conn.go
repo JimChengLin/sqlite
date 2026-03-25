@@ -118,7 +118,8 @@ func (c *conn) parseTimeString(s0 string, x int) (interface{}, bool) {
 // writeTimeFormats are the names and formats supported
 // by the `_time_format` DSN query param.
 var writeTimeFormats = map[string]string{
-	"sqlite": parseTimeFormats[0],
+	"sqlite":   parseTimeFormats[0],
+	"datetime": "2006-01-02 15:04:05",
 }
 
 func (c *conn) formatTime(t time.Time) string {
