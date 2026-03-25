@@ -1535,6 +1535,278 @@ func TestTimeFormatBad(t *testing.T) {
 	}
 }
 
+func TestTimezone(t *testing.T) {
+	ref := time.Date(2021, 1, 2, 16, 39, 17, 123456789, time.UTC)
+
+	t.Run("write", func(t *testing.T) {
+		cases := []struct {
+			tz string
+			f  string
+			w  string
+		}{
+			{tz: "UTC", f: "sqlite", w: "2021-01-02 16:39:17.123456789+00:00"},
+			{tz: "America/New_York", f: "sqlite", w: "2021-01-02 11:39:17.123456789-05:00"},
+			{tz: "UTC", f: "", w: "2021-01-02 16:39:17.123456789 +0000 UTC"},
+		}
+		for _, c := range cases {
+			t.Run(c.tz+"/"+c.f, func(t *testing.T) {
+				q := make(url.Values)
+				q.Set("_timezone", c.tz)
+				if c.f != "" {
+					q.Set("_time_format", c.f)
+				}
+				dsn := "file::memory:?" + q.Encode()
+				db, err := sql.Open(driverName, dsn)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+
+				if _, err := db.Exec("drop table if exists x; create table x (y text)"); err != nil {
+					t.Fatal(err)
+				}
+
+				if _, err := db.Exec(`insert into x values (?)`, ref); err != nil {
+					t.Fatal(err)
+				}
+
+				var got string
+				if err := db.QueryRow(`select y from x`).Scan(&got); err != nil {
+					t.Fatal(err)
+				}
+
+				if got != c.w {
+					t.Fatalf("got %q, want %q", got, c.w)
+				}
+			})
+		}
+	})
+
+	t.Run("read_with_tz", func(t *testing.T) {
+		ny, err := time.LoadLocation("America/New_York")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Strings that already carry timezone info should preserve the
+		// represented instant while being coerced into the configured timezone.
+		q := make(url.Values)
+		q.Set("_timezone", "America/New_York")
+		q.Set("_texttotime", "true")
+		dsn := "file::memory:?" + q.Encode()
+		db, err := sql.Open(driverName, dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+
+		if _, err := db.Exec("create table x (y datetime)"); err != nil {
+			t.Fatal(err)
+		}
+
+		cases := []struct {
+			name  string
+			input string
+			want  time.Time
+		}{
+			{
+				name:  "Z suffix",
+				input: "2021-01-02T16:39:17Z",
+				want:  time.Date(2021, 1, 2, 11, 39, 17, 0, ny),
+			},
+			{
+				name:  "explicit offset",
+				input: "2021-01-02 11:39:17-05:00",
+				want:  time.Date(2021, 1, 2, 11, 39, 17, 0, ny),
+			},
+			{
+				name:  "time string format",
+				input: "2021-01-02 16:39:17.123456789 +0000 UTC",
+				want:  time.Date(2021, 1, 2, 11, 39, 17, 123456789, ny),
+			},
+			{
+				name:  "offset differs from target tz",
+				input: "2021-01-02 19:39:17+03:00",
+				want:  time.Date(2021, 1, 2, 11, 39, 17, 0, ny),
+			},
+		}
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				if _, err := db.Exec("delete from x"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.Exec(`insert into x values (?)`, c.input); err != nil {
+					t.Fatal(err)
+				}
+				var got time.Time
+				if err := db.QueryRow(`select y from x`).Scan(&got); err != nil {
+					t.Fatal(err)
+				}
+				if got.Location().String() != c.want.Location().String() {
+					t.Fatalf("got location %s, want %s", got.Location(), c.want.Location())
+				}
+				if !got.Equal(c.want) {
+					t.Fatalf("got %v, want %v", got, c.want)
+				}
+			})
+		}
+	})
+
+	t.Run("read", func(t *testing.T) {
+		// Insert a bare datetime string (no timezone) and verify that
+		// _timezone causes the parsed time.Time to have the right location.
+		ny, err := time.LoadLocation("America/New_York")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		q := make(url.Values)
+		q.Set("_timezone", "America/New_York")
+		q.Set("_texttotime", "true")
+		dsn := "file::memory:?" + q.Encode()
+		db, err := sql.Open(driverName, dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+
+		if _, err := db.Exec("create table x (y datetime)"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Insert a raw datetime string, as SQLite's datetime() would produce.
+		if _, err := db.Exec(`insert into x values ('2021-01-02 16:39:17')`); err != nil {
+			t.Fatal(err)
+		}
+
+		var got time.Time
+		if err := db.QueryRow(`select y from x`).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+
+		// The raw string "2021-01-02 16:39:17" has no timezone.
+		// _timezone=America/New_York tells the driver to interpret it
+		// as New York time, so the wall clock stays the same but the
+		// location is set.
+		want := time.Date(2021, 1, 2, 16, 39, 17, 0, ny)
+		if got.Location().String() != want.Location().String() {
+			t.Fatalf("got location %s, want %s", got.Location(), want.Location())
+		}
+		if !got.Equal(want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("read_integer", func(t *testing.T) {
+		ny, err := time.LoadLocation("America/New_York")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		q := make(url.Values)
+		q.Set("_timezone", "America/New_York")
+		q.Set("_inttotime", "true")
+		q.Set("_time_integer_format", "unix")
+		dsn := "file::memory:?" + q.Encode()
+		db, err := sql.Open(driverName, dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+
+		if _, err := db.Exec("create table x (y datetime)"); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := db.Exec(`insert into x values (?)`, ref.Unix()); err != nil {
+			t.Fatal(err)
+		}
+
+		var got time.Time
+		if err := db.QueryRow(`select y from x`).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+
+		want := time.Unix(ref.Unix(), 0).In(ny)
+		if got.Location().String() != want.Location().String() {
+			t.Fatalf("got location %s, want %s", got.Location(), want.Location())
+		}
+		if !got.Equal(want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("roundtrip", func(t *testing.T) {
+		// Write a time.Time and read it back through the same
+		// timezone-configured connection. The instant should be
+		// preserved and the location should be the target timezone.
+		ny, err := time.LoadLocation("America/New_York")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		cases := []struct {
+			name string
+			f    string // _time_format, empty for default (time.String)
+		}{
+			{name: "default_format"},
+			{name: "sqlite_format", f: "sqlite"},
+		}
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				q := make(url.Values)
+				q.Set("_timezone", "America/New_York")
+				q.Set("_texttotime", "true")
+				if c.f != "" {
+					q.Set("_time_format", c.f)
+				}
+				dsn := "file::memory:?" + q.Encode()
+				db, err := sql.Open(driverName, dsn)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+
+				if _, err := db.Exec("create table x (y datetime)"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.Exec(`insert into x values (?)`, ref); err != nil {
+					t.Fatal(err)
+				}
+
+				var got time.Time
+				if err := db.QueryRow(`select y from x`).Scan(&got); err != nil {
+					t.Fatal(err)
+				}
+
+				if got.Location().String() != ny.String() {
+					t.Fatalf("got location %s, want %s", got.Location(), ny)
+				}
+				if !got.Equal(ref) {
+					t.Fatalf("got %v, want %v (as instant)", got, ref)
+				}
+			})
+		}
+	})
+}
+
+func TestTimezoneBad(t *testing.T) {
+	db, err := sql.Open(driverName, "file::memory:?_timezone=Bogus/Zone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec("select 1")
+	if err == nil {
+		t.Fatal("wanted error")
+	}
+
+	if !strings.Contains(err.Error(), `unknown _timezone "Bogus/Zone"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestIntToTimeDefaultOff(t *testing.T) {
 	db, err := sql.Open(driverName, "file::memory:")
 	if err != nil {
