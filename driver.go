@@ -51,11 +51,12 @@ func newDriver() *Driver { return d }
 // keyword added for you). May be specified more than once, '&'-separated. For more
 // information on supported PRAGMAs see: https://www.sqlite.org/pragma.html
 //
-// _time_format: The name of a format to use when writing time values to the
-// database. Currently the only supported value is "sqlite" for YYYY-MM-DD HH:MM:SS[+-]HH:MM,
-// which corresponds to format 4 from https://www.sqlite.org/lang_datefunc.html#time_values,
-// including the timezone specifier. If this parameter is not specified, then
-// the default String() format will be used.
+// _time_format: The name of a format to use when writing time values to the database.
+// The currently supported values are (1) "sqlite" for YYYY-MM-DD HH:MM:SS.SSS[+-]HH:MM
+// (format 4 from https://www.sqlite.org/lang_datefunc.html#time_values with sub-second
+// precision and timezone specifier) and (2) "datetime" for YYYY-MM-DD HH:MM:SS
+// (format 3, matching the output of SQLite's datetime() function).
+// If this parameter is not specified, then the default String() format will be used.
 //
 // _time_integer_format: The name of a integer format to use when writing time values.
 // By default, the time is stored as string and the format can be set with _time_format

@@ -1435,6 +1435,7 @@ func TestTimeFormat(t *testing.T) {
 	}{
 		{f: "", w: "2021-01-02 16:39:17.123456789 +0000 UTC"},
 		{f: "sqlite", w: "2021-01-02 16:39:17.123456789+00:00"},
+		{f: "datetime", w: "2021-01-02 16:39:17"},
 	}
 	for _, c := range cases {
 		t.Run("", func(t *testing.T) {
