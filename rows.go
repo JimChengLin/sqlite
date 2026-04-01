@@ -54,9 +54,7 @@ func newRows(c *conn, pstmt uintptr, allocs []uintptr, empty bool) (r *rows, err
 
 // Close closes the rows iterator.
 func (r *rows) Close() (err error) {
-	for _, v := range r.allocs {
-		r.c.free(v)
-	}
+	r.c.freeAllocs(r.allocs)
 	r.allocs = nil
 
 	if r.reuseStmt {

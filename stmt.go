@@ -137,11 +137,7 @@ func (s *stmt) exec(ctx context.Context, args []driver.NamedValue) (r driver.Res
 				}
 				// Free allocations after step
 				if len(allocs) != 0 {
-					defer func() {
-						for _, v := range allocs {
-							s.c.free(v)
-						}
-					}()
+					defer func() { s.c.freeAllocs(allocs) }()
 				}
 			}
 
@@ -195,11 +191,7 @@ func (s *stmt) exec(ctx context.Context, args []driver.NamedValue) (r driver.Res
 				}
 
 				if len(allocs) != 0 {
-					defer func() {
-						for _, v := range allocs {
-							s.c.free(v)
-						}
-					}()
+					defer func() { s.c.freeAllocs(allocs) }()
 				}
 			}
 
@@ -312,9 +304,7 @@ func (s *stmt) query(ctx context.Context, args []driver.NamedValue) (r driver.Ro
 		rc, err := s.c.step(s.pstmt)
 		if err != nil {
 			// On error, we must free allocs manually because 'newRows' won't take ownership
-			for _, v := range allocs {
-				s.c.free(v)
-			}
+			s.c.freeAllocs(allocs)
 			s.c.reset(s.pstmt)
 			s.c.clearBindings(s.pstmt)
 			return nil, err
@@ -351,9 +341,7 @@ func (s *stmt) query(ctx context.Context, args []driver.NamedValue) (r driver.Ro
 
 		default:
 			// Error case
-			for _, v := range allocs {
-				s.c.free(v)
-			}
+			s.c.freeAllocs(allocs)
 			s.c.reset(s.pstmt)
 			s.c.clearBindings(s.pstmt)
 			return nil, s.c.errstr(int32(rc))
