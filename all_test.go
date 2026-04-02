@@ -4085,3 +4085,66 @@ func TestTxCommitBusyFix(t *testing.T) {
 	// If we got here, the fix is working. Clean up.
 	tx3.Rollback()
 }
+
+// TestMultiStmtQueryStringRoundtrip alternates between running parameterized and parameter-free statements.
+// After each round-trip we immediately bind fresh strings on the same connection to stress the C allocator.
+// This is a regression test for a double-free bug of stale bind-parameter memory.
+// Run with -race to enable checkptr, which catches the problem quickly and reliably.
+func TestMultiStmtQueryStringRoundtrip(t *testing.T) {
+	db, err := sql.Open("sqlite", "file::memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1) // force connection reuse so that corruption accumulates
+
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "CREATE TABLE t(v TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+
+	// To reproduce without -race/checkptr, increase the number of iterations here a lot and wait for a crash, a hang, or data corruption
+	const iters = 1
+	for i := range iters {
+		val := fmt.Sprintf("iter-%04d-%s", i, strings.Repeat("x", 1024))
+
+		// Multi-statement query: first statement binds a string param, second statement has no params.
+		rows, err := conn.QueryContext(ctx, "INSERT INTO t VALUES(?); SELECT v FROM t WHERE rowid = last_insert_rowid()", val)
+		if err != nil {
+			t.Fatalf("(%d) query err: %v", i, err)
+		}
+		var got string
+		if rows.Next() {
+			if err := rows.Scan(&got); err != nil {
+				t.Fatalf("(%d) scan err: %v", i, err)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("(%d) rows err: %v", i, err)
+		}
+		// Without the fix, this Close double-frees the string
+		if err := rows.Close(); err != nil {
+			t.Fatalf("(%d) close err: %v", i, err)
+		}
+
+		if got != val {
+			t.Fatalf("(%d) got len=%d\nwant len=%d", i, len(got), len(val))
+		}
+
+		// Immediately bind a fresh string to pressure the allocator into reusing the double-freed block.
+		check := fmt.Sprintf("check-%04d-%s", i, strings.Repeat("y", 1024))
+		var got2 string
+		if err := conn.QueryRowContext(ctx, "SELECT ?", check).Scan(&got2); err != nil {
+			t.Fatalf("(%d) check query err: %v", i, err)
+		}
+		if got2 != check {
+			t.Fatalf("(%d) data corruption: got len=%d\nwant len=%d", i, len(got2), len(check))
+		}
+	}
+}

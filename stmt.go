@@ -262,8 +262,6 @@ func (s *stmt) query(ctx context.Context, args []driver.NamedValue) (r driver.Ro
 		}
 	}
 
-	var allocs []uintptr
-
 	defer func() {
 		if ctx != nil && atomic.LoadInt32(&done) != 0 {
 			if r != nil {
@@ -271,7 +269,7 @@ func (s *stmt) query(ctx context.Context, args []driver.NamedValue) (r driver.Ro
 			}
 			r, err = nil, ctx.Err()
 		} else if r == nil && err == nil {
-			r, err = newRows(s.c, pstmt, allocs, true)
+			r, err = newRows(s.c, pstmt, nil, true)
 		}
 
 		if pstmt != 0 {
@@ -289,6 +287,7 @@ func (s *stmt) query(ctx context.Context, args []driver.NamedValue) (r driver.Ro
 
 	// OPTIMIZED PATH: Single Cached Statement
 	if s.pstmt != 0 {
+		var allocs []uintptr
 		// Bind
 		n, err := s.c.bindParameterCount(s.pstmt)
 		if err != nil {
@@ -314,7 +313,7 @@ func (s *stmt) query(ctx context.Context, args []driver.NamedValue) (r driver.Ro
 		switch rc & 0xff {
 		case sqlite3.SQLITE_ROW:
 			// Pass reuseStmt=true
-			if r, err = newRows(s.c, s.pstmt, allocs, false); err != nil {
+			if r, err = newRows(s.c, s.pstmt, &allocs, false); err != nil {
 				s.c.reset(s.pstmt)
 				s.c.clearBindings(s.pstmt)
 				return nil, err
@@ -331,7 +330,7 @@ func (s *stmt) query(ctx context.Context, args []driver.NamedValue) (r driver.Ro
 
 			// Actually, if we pass reuseStmt=true to an empty set,
 			// rows.Close() will eventually reset it.
-			if r, err = newRows(s.c, s.pstmt, allocs, true); err != nil {
+			if r, err = newRows(s.c, s.pstmt, &allocs, true); err != nil {
 				s.c.reset(s.pstmt)
 				s.c.clearBindings(s.pstmt)
 				return nil, err
@@ -351,6 +350,9 @@ func (s *stmt) query(ctx context.Context, args []driver.NamedValue) (r driver.Ro
 	// FALLBACK PATH: Multi-statement script
 	for psql := s.psql; *(*byte)(unsafe.Pointer(psql)) != 0 && atomic.LoadInt32(&done) == 0; {
 		if pstmt, err = s.c.prepareV2(&psql); err != nil {
+			if r != nil {
+				r.Close()
+			}
 			return nil, err
 		}
 
@@ -359,6 +361,9 @@ func (s *stmt) query(ctx context.Context, args []driver.NamedValue) (r driver.Ro
 		}
 
 		err = func() (err error) {
+			var allocs []uintptr
+			defer func() { s.c.freeAllocs(allocs) }()
+
 			n, err := s.c.bindParameterCount(pstmt)
 			if err != nil {
 				return err
@@ -380,15 +385,14 @@ func (s *stmt) query(ctx context.Context, args []driver.NamedValue) (r driver.Ro
 				if r != nil {
 					r.Close()
 				}
-				if r, err = newRows(s.c, pstmt, allocs, false); err != nil {
+				if r, err = newRows(s.c, pstmt, &allocs, false); err != nil {
 					return err
 				}
-
 				pstmt = 0
 				return nil
 			case sqlite3.SQLITE_DONE:
 				if r == nil {
-					if r, err = newRows(s.c, pstmt, allocs, true); err != nil {
+					if r, err = newRows(s.c, pstmt, &allocs, true); err != nil {
 						return err
 					}
 					pstmt = 0
@@ -404,10 +408,9 @@ func (s *stmt) query(ctx context.Context, args []driver.NamedValue) (r driver.Ro
 				if r != nil {
 					r.Close()
 				}
-				if r, err = newRows(s.c, pstmt, allocs, true); err != nil {
+				if r, err = newRows(s.c, pstmt, &allocs, true); err != nil {
 					return err
 				}
-
 				pstmt = 0
 			}
 			return nil
@@ -423,6 +426,9 @@ func (s *stmt) query(ctx context.Context, args []driver.NamedValue) (r driver.Ro
 		}
 
 		if err != nil {
+			if r != nil {
+				r.Close() // r is from a previous iteration; clean up since we won't return it
+			}
 			return nil, err
 		}
 	}
