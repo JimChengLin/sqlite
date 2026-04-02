@@ -739,18 +739,19 @@ func vtabUpdateTrampoline(tls *libc.TLS, pVtab uintptr, argc int32, argv uintptr
 	}
 
 	// INSERT or UPDATE: argc == N+2. argv[0]=oldRowid (NULL for insert),
-	// argv[1..N]=column values, argv[N+1]=newRowid (or desired rowid for insert, may be NULL).
+	// argv[1]=newRowid (or desired rowid for insert, may be NULL),
+	// argv[2..N+1]=column values.
 	if argc < 3 {
 		return sqlite3.SQLITE_MISUSE
 	}
 	nCols := argc - 2
-	// Extract column values
-	colsPtr := argv + uintptr(1)*sqliteValPtrSize
+	// Extract column values starting from argv[2]
+	colsPtr := argv + uintptr(2)*sqliteValPtrSize
 	cols := functionArgs(tls, nCols, colsPtr)
 
 	// Determine old/new rowid
 	oldPtr := *(*uintptr)(unsafe.Pointer(argv + uintptr(0)*sqliteValPtrSize))
-	newPtr := *(*uintptr)(unsafe.Pointer(argv + uintptr(argc-1)*sqliteValPtrSize))
+	newPtr := *(*uintptr)(unsafe.Pointer(argv + uintptr(1)*sqliteValPtrSize))
 
 	oldIsNull := sqlite3.Xsqlite3_value_type(tls, oldPtr) == sqlite3.SQLITE_NULL
 	newIsNull := sqlite3.Xsqlite3_value_type(tls, newPtr) == sqlite3.SQLITE_NULL
