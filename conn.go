@@ -936,7 +936,7 @@ func (c *conn) Serialize() (v []byte, err error) {
 	return v, nil
 }
 
-// Deserialize restore a database from the content returned by Serialize.
+// Deserialize restores a database from the content returned by Serialize.
 func (c *conn) Deserialize(buf []byte) (err error) {
 	bufLen := len(buf)
 	pBuf := c.tls.Alloc(bufLen) // free will be done if it fails or on close, must not be freed here
