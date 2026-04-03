@@ -182,7 +182,7 @@ func (d *SQLitePreUpdateData) value(ppValue uintptr, i int, new bool) (any, erro
 	return src, nil
 }
 
-func preUpdateHookTrampoline(tls *libc.TLS, handle uintptr, pCsr uintptr, op int32, zDb uintptr, pTab uintptr, iKey1 int64, iReg int32, iBlobWrite int32) {
+func preUpdateHookTrampoline(tls *libc.TLS, handle uintptr, pCsr uintptr, op int32, zDb uintptr, pTab uintptr, iKey1 int64, iKey2 int64) {
 	xPreUpdateHandlers.mu.RLock()
 	xPreUpdateHandler := xPreUpdateHandlers.m[handle]
 	xPreUpdateHandlers.mu.RUnlock()
@@ -197,7 +197,7 @@ func preUpdateHookTrampoline(tls *libc.TLS, handle uintptr, pCsr uintptr, op int
 		DatabaseName: libc.GoString(zDb),
 		TableName:    libc.GoString(pTab),
 		OldRowID:     iKey1,
-		NewRowID:     int64(iReg),
+		NewRowID:     iKey2,
 	}
 	xPreUpdateHandler(data)
 }
