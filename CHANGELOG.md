@@ -1,6 +1,6 @@
 # Changelog
 
-- 2026-04-03 v1.48.1:
+ - 2026-04-03 v1.48.1:
      - Fix memory leaks and double-free vulnerabilities in the multi-statement query execution path.
      - Ensure bind-parameter allocations are reliably freed via strict ownership transfer if an error occurs mid-loop or if multiple statements bind parameters.
      - Fix a resource leak where a subsequent statement's error could orphan a previously generated `rows` object without closing it, leaking the prepared statement handle.
