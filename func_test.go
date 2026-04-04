@@ -672,6 +672,37 @@ func TestRegisteredFunctions(t *testing.T) {
 		})
 	})
 
+	t.Run("serialize and deserialize allocator", func(tt *testing.T) {
+		// Deserialize passes the buffer to sqlite3_deserialize with FREEONCLOSE|RESIZEABLE,
+		// so the buffer must come from sqlite3_malloc.
+		// If it comes from the wrong allocator, sqlite3_free or sqlite3_realloc on the buffer crashes.
+		db, err := sql.Open("sqlite", "file::memory:")
+		if err != nil {
+			tt.Fatal(err)
+		}
+		defer db.Close()
+
+		conn, err := db.Conn(context.Background())
+		if err != nil {
+			tt.Fatal(err)
+		}
+		err = conn.Raw(func(dc any) error {
+			s := dc.(interface {
+				Serialize() ([]byte, error)
+				Deserialize([]byte) error
+			})
+			buf, err := s.Serialize()
+			if err != nil {
+				return err
+			}
+			return s.Deserialize(buf)
+		})
+		if err != nil {
+			tt.Fatal(err)
+		}
+		conn.Close()
+	})
+
 	t.Run("backup and restore", func(tt *testing.T) {
 		type backuper interface {
 			NewBackup(string) (*Backup, error)
