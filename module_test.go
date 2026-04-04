@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 
@@ -882,10 +883,13 @@ type updRow struct {
 	a, b string
 }
 
-type updaterModuleX struct{}
+type updaterModuleX struct {
+	lastTable *updaterTableX
+}
 type updaterTableX struct {
 	rows   []updRow
 	nextID int64
+	txLog  []string
 }
 type updaterCursorX struct {
 	t   *updaterTableX
@@ -899,7 +903,9 @@ func (m *updaterModuleX) Create(ctx vtab.Context, args []string) (vtab.Table, er
 	if err := ctx.Declare(fmt.Sprintf("CREATE TABLE %s(val, a, b)", args[2])); err != nil {
 		return nil, err
 	}
-	return &updaterTableX{rows: nil, nextID: 1}, nil
+	tbl := &updaterTableX{rows: nil, nextID: 1}
+	m.lastTable = tbl
+	return tbl, nil
 }
 func (m *updaterModuleX) Connect(ctx vtab.Context, args []string) (vtab.Table, error) {
 	return m.Create(ctx, args)
@@ -947,6 +953,15 @@ func (t *updaterTableX) Delete(oldRowid int64) error {
 	return fmt.Errorf("row %d not found", oldRowid)
 }
 
+// Transactional methods — record calls so tests can verify dispatch.
+func (t *updaterTableX) Begin() error         { t.txLog = append(t.txLog, "begin"); return nil }
+func (t *updaterTableX) Sync() error          { t.txLog = append(t.txLog, "sync"); return nil }
+func (t *updaterTableX) Commit() error        { t.txLog = append(t.txLog, "commit"); return nil }
+func (t *updaterTableX) Rollback() error      { t.txLog = append(t.txLog, "rollback"); return nil }
+func (t *updaterTableX) Savepoint(int) error  { t.txLog = append(t.txLog, "savepoint"); return nil }
+func (t *updaterTableX) Release(int) error    { t.txLog = append(t.txLog, "release"); return nil }
+func (t *updaterTableX) RollbackTo(int) error { t.txLog = append(t.txLog, "rollbackto"); return nil }
+
 func (c *updaterCursorX) Filter(idxNum int, idxStr string, vals []vtab.Value) error {
 	c.pos = 0
 	return nil
@@ -981,8 +996,10 @@ func TestVtabUpdaterInsertUpdateDelete(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	defer db.Close()
+	db.SetMaxOpenConns(1)
 
-	if err := vtab.RegisterModule(db, "updemo", &updaterModuleX{}); err != nil {
+	mod := &updaterModuleX{}
+	if err := vtab.RegisterModule(db, "updemo", mod); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	if _, err := db.Exec(`CREATE VIRTUAL TABLE ut USING updemo(name,email)`); err != nil {
@@ -1079,4 +1096,37 @@ func TestVtabUpdaterInsertUpdateDelete(t *testing.T) {
 	}
 	assertVals("rowid-only change", 99, "Danny", "a4", "b4")
 	assertRows([]int64{1, 3, 99})
+
+	// Verify that savepoint-level Transactional callbacks are dispatched.
+	tbl := mod.lastTable
+	tbl.txLog = nil // reset from earlier operations
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO ut(val, a, b) VALUES('Eve', 'a5', 'b5')`); err != nil {
+		t.Fatalf("insert eve: %v", err)
+	}
+	if _, err := tx.Exec(`SAVEPOINT sp1`); err != nil {
+		t.Fatalf("savepoint: %v", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO ut(val, a, b) VALUES('Frank', 'a6', 'b6')`); err != nil {
+		t.Fatalf("insert frank: %v", err)
+	}
+	if _, err := tx.Exec(`ROLLBACK TO sp1`); err != nil {
+		t.Fatalf("rollback to: %v", err)
+	}
+	if _, err := tx.Exec(`RELEASE sp1`); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	for _, want := range []string{"begin", "savepoint", "rollbackto", "release"} {
+		if !slices.Contains(tbl.txLog, want) {
+			t.Errorf("%s callback was never called; txLog = %v", want, tbl.txLog)
+		}
+	}
 }
