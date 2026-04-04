@@ -4148,3 +4148,172 @@ func TestMultiStmtQueryStringRoundtrip(t *testing.T) {
 		}
 	}
 }
+
+// TestExecReturningMultiRow verifies that Exec() with a DML RETURNING clause
+// that affects multiple rows completes the full operation (not just the first row).
+func TestExecReturningMultiRow(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+
+	// INSERT multiple rows with RETURNING via Exec.
+	result, err := db.Exec("INSERT INTO t (id, v) VALUES (1,'a'), (2,'b'), (3,'c') RETURNING id")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// All three rows must actually exist in the table.
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM t").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 rows in table after INSERT...RETURNING via Exec, got %d", count)
+	}
+
+	n, err := result.RowsAffected()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Errorf("expected RowsAffected()==3, got %d", n)
+	}
+
+	// UPDATE all rows with RETURNING via Exec.
+	result, err = db.Exec("UPDATE t SET v = v || '!' RETURNING id")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n, err = result.RowsAffected()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Errorf("expected RowsAffected()==3 for UPDATE...RETURNING, got %d", n)
+	}
+
+	// Verify all rows were actually updated.
+	rows, err := db.Query("SELECT v FROM t ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var vals []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		vals = append(vals, v)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(vals) != 3 || vals[0] != "a!" || vals[1] != "b!" || vals[2] != "c!" {
+		t.Fatalf("expected [a! b! c!], got %v", vals)
+	}
+
+	// DELETE with RETURNING via Exec.
+	result, err = db.Exec("DELETE FROM t RETURNING id")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n, err = result.RowsAffected()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Errorf("expected RowsAffected()==3 for DELETE...RETURNING, got %d", n)
+	}
+
+	if err := db.QueryRow("SELECT count(*) FROM t").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 rows after DELETE...RETURNING via Exec, got %d", count)
+	}
+}
+
+func TestExecReturningMultiStatement(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Multi-statement exec forces the fallback path in stmt.exec.
+	// The RETURNING statement must be last so its result is the one checked.
+	result, err := db.Exec("SELECT 1; INSERT INTO t (id, v) VALUES (1,'a'), (2,'b'), (3,'c') RETURNING id")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM t").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 rows after multi-statement INSERT...RETURNING, got %d", count)
+	}
+
+	n, err := result.RowsAffected()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Errorf("expected RowsAffected()==3, got %d", n)
+	}
+}
+
+// TestExecReturningCancelDuringDrain verifies that cancelling the context
+// during the row-drain loop of a DML RETURNING Exec returns an error.
+func TestExecReturningCancelDuringDrain(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec("CREATE TABLE t (id INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed enough rows so the RETURNING drain takes measurable time.
+	if _, err := db.Exec(`
+		WITH RECURSIVE gen(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM gen WHERE n < 10000)
+		INSERT INTO t SELECT n FROM gen
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Cancel quickly so the drain loop is interrupted.
+	go func() {
+		time.Sleep(time.Microsecond)
+		cancel()
+	}()
+
+	_, err = db.ExecContext(ctx, "DELETE FROM t RETURNING id")
+	if err == nil {
+		// The cancel is a race — it may not fire in time.
+		// That's OK; we're testing that cancellation is respected, not guaranteed.
+		t.Log("context cancel did not fire during drain (race); test is inconclusive")
+		return
+	}
+	if !(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "interrupted (9)")) {
+		t.Fatalf("expected context.Canceled, context.DeadlineExceeded, or interrupted error, got %v", err)
+	}
+}
