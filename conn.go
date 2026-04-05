@@ -647,14 +647,21 @@ func (c *conn) freeAllocs(allocs []uintptr) {
 //
 //	const char *sqlite3_errstr(int);
 func (c *conn) errstr(rc int32) error {
-	p := sqlite3.Xsqlite3_errstr(c.tls, rc)
-	str := libc.GoString(p)
-	p = sqlite3.Xsqlite3_errmsg(c.tls, c.db)
+	return errstrForDB(c.tls, rc, c.db)
+}
+
+func errstrForDB(tls *libc.TLS, rc int32, db uintptr) error {
+	pStr := sqlite3.Xsqlite3_errstr(tls, rc)
+	str := libc.GoString(pStr)
 	var s string
 	if rc == sqlite3.SQLITE_BUSY {
 		s = " (SQLITE_BUSY)"
 	}
-	switch msg := libc.GoString(p); {
+	if db == 0 {
+		return &Error{msg: fmt.Sprintf("%s (%v)%s", str, rc, s), code: int(rc)}
+	}
+	pMsg := sqlite3.Xsqlite3_errmsg(tls, db)
+	switch msg := libc.GoString(pMsg); {
 	case msg == str:
 		return &Error{msg: fmt.Sprintf("%s (%v)%s", str, rc, s), code: int(rc)}
 	default:
