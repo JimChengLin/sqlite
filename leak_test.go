@@ -4,11 +4,56 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"modernc.org/libc"
 )
+
+// TestOpenV2FailureResourceLeak verifies that a failed sql.Open+Ping (e.g.,
+// opening an invalid path) does not leak C-heap memory. Before the fix,
+// every failed open leaked a libc.TLS and potentially a sqlite3 handle.
+//
+// Run with -tags memory.counters to enable allocation tracking.
+func TestOpenV2FailureResourceLeak(t *testing.T) {
+	// Use a path that will reliably fail to open: a non-existent directory.
+	// SQLITE_OPEN_CREATE can create the file, but not intermediate dirs.
+	badDSN := filepath.Join(t.TempDir(), "missing", "impossible.db")
+
+	tryOpen := func() {
+		db, err := sql.Open(driverName, badDSN)
+		if err != nil {
+			// sql.Open itself rarely errors; the real error comes from Ping/conn.
+			return
+		}
+		err = db.Ping()
+		if err == nil {
+			t.Fatal("expected Ping to fail for invalid path")
+		}
+		db.Close()
+	}
+
+	// Warm up to reach steady state.
+	for range 100 {
+		tryOpen()
+	}
+
+	before := libc.MemStat()
+	if before.Allocs == 0 && before.Bytes == 0 {
+		t.Skip("requires -tags memory.counters")
+	}
+	for range 1000 {
+		tryOpen()
+	}
+	after := libc.MemStat()
+
+	leaked := after.Allocs - before.Allocs
+	t.Logf("allocs before=%d after=%d delta=%d", before.Allocs, after.Allocs, leaked)
+	if leaked > 100 {
+		t.Fatalf("memory leak: net alloc count grew by %d over 1000 failed opens", leaked)
+	}
+}
 
 // TestMultiStmtNopAllocsLeak exercises a leak in the multi-statement query
 // path: when a middle statement binds parameters and returns SQLITE_DONE while
