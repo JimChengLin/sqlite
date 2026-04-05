@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -875,6 +876,124 @@ func TestRegisteredFunctions(t *testing.T) {
 
 		if err = inMemDB.Close(); err != nil {
 			tt.Fatal(err)
+		}
+	})
+
+	t.Run("restore init failure reads error from dest handle", func(tt *testing.T) {
+		// sqlite3_backup_init stores errors on the *destination* handle.
+		// In restore mode the destination is c.db, so the error must be
+		// read from c.db rather than remoteConn.db.
+		//
+		// We trigger a backup_init failure by starting a read transaction
+		// on the destination before calling NewRestore. backup_init checks
+		// for this and fails with SQLITE_ERROR on the destination handle.
+
+		// Create a source database file with some data.
+		tmpFile := filepath.Join(tt.TempDir(), "src.db")
+		src, err := newConn(tmpFile)
+		if err != nil {
+			tt.Fatal(err)
+		}
+		if _, err := src.exec(context.Background(), "CREATE TABLE t(x)", nil); err != nil {
+			tt.Fatal(err)
+		}
+		src.Close()
+
+		// Create the destination connection (the one we'll restore into).
+		dest, err := newConn(":memory:")
+		if err != nil {
+			tt.Fatal(err)
+		}
+		defer dest.Close()
+
+		// Put a read transaction on dest so backup_init will refuse it.
+		if _, err := dest.exec(context.Background(), "CREATE TABLE dummy(x)", nil); err != nil {
+			tt.Fatal(err)
+		}
+		if _, err := dest.exec(context.Background(), "BEGIN", nil); err != nil {
+			tt.Fatal(err)
+		}
+		if _, err := dest.exec(context.Background(), "SELECT * FROM dummy", nil); err != nil {
+			tt.Fatal(err)
+		}
+
+		// Attempt restore. backup_init should fail.
+		_, err = dest.NewRestore(tmpFile)
+		if err == nil {
+			tt.Fatal("expected restore to fail due to read transaction on destination")
+		}
+
+		var sqliteErr *Error
+		if !errors.As(err, &sqliteErr) {
+			tt.Fatalf("expected *Error, got %T: %v", err, err)
+		}
+
+		// The error must come from the destination handle (c.db). If it
+		// were read from remoteConn.db it would be 0 (SQLITE_OK, "not an
+		// error").
+		if sqliteErr.Code() != 1 {
+			tt.Fatalf("expected SQLITE_ERROR (1), got %d: %v", sqliteErr.Code(), err)
+		}
+	})
+
+	t.Run("backup init failure reads error from dest handle", func(tt *testing.T) {
+		// sqlite3_backup_init stores errors on the *destination* handle.
+		// In backup mode the destination is remoteConn.db, so the error
+		// must be read from remoteConn.db rather than c.db.
+		//
+		// We trigger a backup_init failure by starting a read transaction
+		// on the destination before invoking c.backup. We call the
+		// unexported c.backup directly because NewBackup creates the
+		// destination connection internally.
+
+		src, err := newConn(":memory:")
+		if err != nil {
+			tt.Fatal(err)
+		}
+		defer src.Close()
+		if _, err := src.exec(context.Background(), "CREATE TABLE t(x)", nil); err != nil {
+			tt.Fatal(err)
+		}
+
+		dest, err := newConn(filepath.Join(tt.TempDir(), "dst.db"))
+		if err != nil {
+			tt.Fatal(err)
+		}
+		defer dest.Close()
+
+		// Put a read transaction on dest so backup_init will refuse it.
+		if _, err := dest.exec(context.Background(), "CREATE TABLE dummy(x)", nil); err != nil {
+			tt.Fatal(err)
+		}
+		if _, err := dest.exec(context.Background(), "BEGIN", nil); err != nil {
+			tt.Fatal(err)
+		}
+		if _, err := dest.exec(context.Background(), "SELECT * FROM dummy", nil); err != nil {
+			tt.Fatal(err)
+		}
+
+		// Attempt backup. backup_init should fail.
+		_, err = src.backup(dest, false)
+		if err == nil {
+			tt.Fatal("expected backup to fail due to read transaction on destination")
+		}
+
+		var sqliteErr *Error
+		if !errors.As(err, &sqliteErr) {
+			tt.Fatalf("expected *Error, got %T: %v", err, err)
+		}
+
+		// The error code is correct in both buggy and fixed versions in
+		// backup mode (the old code already read errcode from the right
+		// handle), but the errmsg side was wrong. To pin the message fix,
+		// require a substring from the destination's actual sqlite errmsg
+		// ("destination database is in use"). Reading errmsg from c.db
+		// (the source) would yield "not an error" instead.
+		if sqliteErr.Code() != 1 {
+			tt.Fatalf("expected SQLITE_ERROR (1), got %d: %v", sqliteErr.Code(), err)
+		}
+		if !strings.Contains(err.Error(), "destination") {
+			tt.Fatalf("expected error message read from destination handle, got: %v", err)
 		}
 	})
 
