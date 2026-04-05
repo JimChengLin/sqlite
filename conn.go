@@ -939,6 +939,9 @@ func (c *conn) Serialize() (v []byte, err error) {
 // Deserialize restores a database from the content returned by Serialize.
 func (c *conn) Deserialize(buf []byte) (err error) {
 	bufLen := len(buf)
+	if bufLen == 0 {
+		return fmt.Errorf("sqlite: empty buffer passed to Deserialize")
+	}
 	pBuf := sqlite3.Xsqlite3_malloc64(c.tls, uint64(bufLen))
 	if pBuf == 0 {
 		return fmt.Errorf("sqlite: cannot allocate %d bytes for deserialize", bufLen)
