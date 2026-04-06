@@ -28,6 +28,8 @@
      - See [GitLab merge request #106](https://gitlab.com/cznic/sqlite/-/merge_requests/106), thanks Josh Bleecher Snyder!
      - Fix "Shadowed err value (stmt.go)".
      - See [GitLab issue #249](https://gitlab.com/cznic/sqlite/-/work_items/249), thanks Emrecan BATI!
+     - Fix silent omission of virtual table savepoint callbacks by correctly setting the sqlite3_module version.
+     - See [GitLab merge request #107](https://gitlab.com/cznic/sqlite/-/merge_requests/107), thanks Josh Bleecher Snyder!
 
 
  - 2026-04-03 v1.48.1:
