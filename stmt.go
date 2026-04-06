@@ -171,7 +171,7 @@ func (s *stmt) exec(ctx context.Context, args []driver.NamedValue) (r driver.Res
 			default:
 				return s.c.errstr(int32(rc))
 			}
-			return nil
+			return err
 		}()
 
 		// RESET (Crucial: Do not finalize)
@@ -195,7 +195,7 @@ func (s *stmt) exec(ctx context.Context, args []driver.NamedValue) (r driver.Res
 		if pstmt == 0 {
 			continue
 		}
-		err = func() (err error) {
+		err = func() error {
 			n, err := s.c.bindParameterCount(pstmt)
 			if err != nil {
 				return err
@@ -241,7 +241,7 @@ func (s *stmt) exec(ctx context.Context, args []driver.NamedValue) (r driver.Res
 				return s.c.errstr(int32(rc))
 			}
 
-			return nil
+			return err
 		}()
 
 		e := s.c.finalize(pstmt)
