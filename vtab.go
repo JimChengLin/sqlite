@@ -138,7 +138,7 @@ func (c *conn) registerSingleModule(name string, m vtab.Module) error {
 			return fmt.Errorf("sqlite: failed to allocate module %q", name)
 		}
 		mod := (*sqlite3.Sqlite3_module)(unsafe.Pointer(modPtr))
-		mod.FiVersion = 1
+		mod.FiVersion = 2
 		mod.FxCreate = cFuncPointer(vtabCreateTrampoline)
 		mod.FxConnect = cFuncPointer(vtabConnectTrampoline)
 		mod.FxBestIndex = cFuncPointer(vtabBestIndexTrampoline)
