@@ -5,6 +5,7 @@
 package vfs
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -101,16 +102,13 @@ func vfsRead(tls *libc.TLS, pFile uintptr, zBuf uintptr, iAmt int32, iOfst sqlit
 	}
 
 	b := (*libc.RawMem)(unsafe.Pointer(zBuf))[:iAmt]
-	n, err := f.Read(b)
-	if n == int(iAmt) {
+	n, err := io.ReadFull(f, b)
+	if err == nil {
 		return sqlite3.SQLITE_OK
 	}
 
-	if n < int(iAmt) && err == nil {
-		b := b[n:]
-		for i := range b {
-			b[i] = 0
-		}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		clear(b[n:])
 		return sqlite3.SQLITE_IOERR_SHORT_READ
 	}
 
