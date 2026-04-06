@@ -149,7 +149,24 @@ func (s *stmt) exec(ctx context.Context, args []driver.NamedValue) (r driver.Res
 
 			// Handle Result
 			switch rc & 0xff {
-			case sqlite3.SQLITE_DONE, sqlite3.SQLITE_ROW:
+			case sqlite3.SQLITE_DONE:
+				r, err = newResult(s.c)
+			case sqlite3.SQLITE_ROW:
+				// Step to completion, matching C sqlite3_exec()
+				// semantics. Required for DML RETURNING correctness;
+				// also drains SELECT results if passed to Exec.
+				for rc&0xff == sqlite3.SQLITE_ROW {
+					if atomic.LoadInt32(&done) != 0 {
+						return ctx.Err()
+					}
+					rc, err = s.c.step(s.pstmt)
+					if err != nil {
+						return err
+					}
+				}
+				if rc&0xff != sqlite3.SQLITE_DONE {
+					return s.c.errstr(int32(rc))
+				}
 				r, err = newResult(s.c)
 			default:
 				return s.c.errstr(int32(rc))
@@ -201,7 +218,24 @@ func (s *stmt) exec(ctx context.Context, args []driver.NamedValue) (r driver.Res
 			}
 
 			switch rc & 0xff {
-			case sqlite3.SQLITE_DONE, sqlite3.SQLITE_ROW:
+			case sqlite3.SQLITE_DONE:
+				r, err = newResult(s.c)
+			case sqlite3.SQLITE_ROW:
+				// Step to completion, matching C sqlite3_exec()
+				// semantics. Required for DML RETURNING correctness;
+				// also drains SELECT results if passed to Exec.
+				for rc&0xff == sqlite3.SQLITE_ROW {
+					if atomic.LoadInt32(&done) != 0 {
+						return ctx.Err()
+					}
+					rc, err = s.c.step(pstmt)
+					if err != nil {
+						return err
+					}
+				}
+				if rc&0xff != sqlite3.SQLITE_DONE {
+					return s.c.errstr(int32(rc))
+				}
 				r, err = newResult(s.c)
 			default:
 				return s.c.errstr(int32(rc))
