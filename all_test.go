@@ -2900,6 +2900,36 @@ func TestConstraintUniqueError(t *testing.T) {
 	}
 }
 
+// TestOpenV2FailureErrorMessage verifies that a failed open returns a
+// structured *Error with the expected SQLITE_CANTOPEN code and a coherent
+// error message. On this code path sqlite3_open_v2 allocates a handle even
+// though it returns an error; the leak of that handle (and of libc.TLS in
+// newConn) is covered by leak_test.go.
+func TestOpenV2FailureErrorMessage(t *testing.T) {
+	badDSN := filepath.Join(t.TempDir(), "missing", "impossible.db")
+	db, err := sql.Open(driverName, badDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	err = db.Ping()
+	if err == nil {
+		t.Fatal("expected Ping to fail for invalid path")
+	}
+
+	var sqliteErr *Error
+	if !errors.As(err, &sqliteErr) {
+		t.Fatalf("expected *Error, got %T: %v", err, err)
+	}
+	if sqliteErr.Code() != sqlite3.SQLITE_CANTOPEN {
+		t.Errorf("expected SQLITE_CANTOPEN (%d), got code %d: %s", sqlite3.SQLITE_CANTOPEN, sqliteErr.Code(), err)
+	}
+	if msg := sqliteErr.Error(); !strings.Contains(msg, "unable to open database file") {
+		t.Errorf("error message %q does not contain expected SQLITE_CANTOPEN text", msg)
+	}
+}
+
 func TestColumnTypeScanType(t *testing.T) {
 	db, err := sql.Open(driverName, "file::memory:")
 	if err != nil {

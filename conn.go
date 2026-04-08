@@ -64,6 +64,7 @@ func newConn(dsn string) (*conn, error) {
 			sqlite3.SQLITE_OPEN_URI,
 	)
 	if err != nil {
+		c.tls.Close()
 		return nil, err
 	}
 
@@ -617,7 +618,18 @@ func (c *conn) openV2(name, vfsName string, flags int32) (uintptr, error) {
 	}
 
 	if rc := sqlite3.Xsqlite3_open_v2(c.tls, s, p, flags, vfs); rc != sqlite3.SQLITE_OK {
-		return 0, c.errstr(rc)
+		dbh := *(*uintptr)(unsafe.Pointer(p))
+		// Per SQLite docs, sqlite3_open_v2 may allocate a handle even on
+		// failure. The error message is stored on that handle, and it must
+		// be closed to avoid leaking resources.
+		var err error
+		if dbh != 0 {
+			err = errstrForDB(c.tls, rc, dbh)
+			sqlite3.Xsqlite3_close_v2(c.tls, dbh)
+		} else {
+			err = c.errstr(rc)
+		}
+		return 0, err
 	}
 
 	return *(*uintptr)(unsafe.Pointer(p)), nil
