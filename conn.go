@@ -1015,8 +1015,12 @@ func (c *conn) backup(remoteConn *conn, restore bool) (_ *Backup, finalErr error
 		pBackup = sqlite3.Xsqlite3_backup_init(c.tls, remoteConn.db, dstSchema, c.db, srcSchema)
 	}
 	if pBackup <= 0 {
-		rc := sqlite3.Xsqlite3_errcode(c.tls, remoteConn.db)
-		return nil, c.errstr(rc)
+		destDb := remoteConn.db
+		if restore {
+			destDb = c.db
+		}
+		rc := sqlite3.Xsqlite3_errcode(c.tls, destDb)
+		return nil, errstrForDB(c.tls, rc, destDb)
 	}
 
 	return &Backup{srcConn: c, dstConn: remoteConn, pBackup: pBackup}, nil
