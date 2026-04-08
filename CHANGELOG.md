@@ -36,6 +36,9 @@
      - Refactor internal error formatting to safely handle uninitialized or closed database pointers.
      - Prevent a misleading "out of memory" error message when an operation fails and the underlying SQLite database handle is `NULL` (`db == 0`).
      - See [GitLab merge request #109](https://gitlab.com/cznic/sqlite/-/merge_requests/109), thanks Josh Bleecher Snyder!
+     - Fix error handling in database backup and restore initialization (`sqlite3_backup_init`).
+     - Ensure error codes and messages are accurately read from the destination database handle rather than hardcoding the source or remote handle. This prevents swallowed errors or mismatched "not an error" messages when a backup or restore operation fails to start.
+     - See [GitLab merge request #111](https://gitlab.com/cznic/sqlite/-/merge_requests/111), thanks Josh Bleecher Snyder!
 
 
  - 2026-04-03 v1.48.1:
