@@ -4347,3 +4347,54 @@ func TestExecReturningCancelDuringDrain(t *testing.T) {
 		t.Fatalf("expected context.Canceled, context.DeadlineExceeded, or interrupted error, got %v", err)
 	}
 }
+
+func TestDBPageVtab(t *testing.T) {
+	// Open an in-memory database
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create a table and insert some data to ensure pages are allocated
+	_, err = db.Exec(`
+		CREATE TABLE test_dbpage (id INTEGER PRIMARY KEY, val TEXT);
+		INSERT INTO test_dbpage (val) VALUES ('hello dbpage');
+	`)
+	if err != nil {
+		t.Fatalf("Failed to setup test table: %v", err)
+	}
+
+	// Query the sqlite_dbpage virtual table.
+	// If -DSQLITE_ENABLE_DBPAGE_VTAB was not enabled, this will return an error 
+	// (e.g., "no such table: sqlite_dbpage").
+	var pgno int
+	var data []byte
+
+	// We'll query the first page (pgno = 1), which contains the SQLite header.
+	err = db.QueryRow("SELECT pgno, data FROM sqlite_dbpage WHERE pgno = 1").Scan(&pgno, &data)
+	if err != nil {
+		t.Fatalf("Failed to query sqlite_dbpage: %v", err)
+	}
+
+	// Basic sanity checks on the returned page
+	if pgno != 1 {
+		t.Errorf("Expected page number 1, got %d", pgno)
+	}
+
+	if len(data) == 0 {
+		t.Error("Expected page data to be non-empty")
+	}
+
+	// The first 16 bytes of page 1 always contain the SQLite format string:
+	// "SQLite format 3\000"
+	expectedHeader := "SQLite format 3\x00"
+	if len(data) >= 16 {
+		header := string(data[:16])
+		if header != expectedHeader {
+			t.Errorf("Expected SQLite header %q, got %q", expectedHeader, header)
+		}
+	} else {
+		t.Errorf("Page 1 data is too short to contain a valid SQLite header: %d bytes", len(data))
+	}
+}
