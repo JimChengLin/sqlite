@@ -341,6 +341,8 @@ const m_MAC_OS_VERSION_16_0 = "__MAC_16_0"
 const m_MAC_OS_VERSION_26_0 = "__MAC_26_0"
 const m_MAC_OS_VERSION_26_1 = "__MAC_26_1"
 const m_MAC_OS_VERSION_26_2 = "__MAC_26_2"
+const m_MAC_OS_VERSION_26_3 = "__MAC_26_3"
+const m_MAC_OS_VERSION_26_4 = "__MAC_26_4"
 const m_MAC_OS_X_VERSION_10_0 = "__MAC_10_0"
 const m_MAC_OS_X_VERSION_10_1 = "__MAC_10_1"
 const m_MAC_OS_X_VERSION_10_10 = "__MAC_10_10"
@@ -716,11 +718,12 @@ const m_SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION = 1005
 const m_SQLITE_DBCONFIG_ENABLE_QPSG = 1007
 const m_SQLITE_DBCONFIG_ENABLE_TRIGGER = 1003
 const m_SQLITE_DBCONFIG_ENABLE_VIEW = 1015
+const m_SQLITE_DBCONFIG_FP_DIGITS = 1023
 const m_SQLITE_DBCONFIG_LEGACY_ALTER_TABLE = 1012
 const m_SQLITE_DBCONFIG_LEGACY_FILE_FORMAT = 1016
 const m_SQLITE_DBCONFIG_LOOKASIDE = 1001
 const m_SQLITE_DBCONFIG_MAINDBNAME = 1000
-const m_SQLITE_DBCONFIG_MAX = 1022
+const m_SQLITE_DBCONFIG_MAX = 1023
 const m_SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE = 1006
 const m_SQLITE_DBCONFIG_RESET_DATABASE = 1009
 const m_SQLITE_DBCONFIG_REVERSE_SCANORDER = 1019
@@ -864,6 +867,7 @@ const m_SQLITE_LIMIT_EXPR_DEPTH = 3
 const m_SQLITE_LIMIT_FUNCTION_ARG = 6
 const m_SQLITE_LIMIT_LENGTH = 0
 const m_SQLITE_LIMIT_LIKE_PATTERN_LENGTH = 8
+const m_SQLITE_LIMIT_PARSER_DEPTH = 12
 const m_SQLITE_LIMIT_SQL_LENGTH = 1
 const m_SQLITE_LIMIT_TRIGGER_DEPTH = 10
 const m_SQLITE_LIMIT_VARIABLE_NUMBER = 9
@@ -927,6 +931,7 @@ const m_SQLITE_OPEN_WAL = 0x00080000
 const m_SQLITE_PERM = 3
 const m_SQLITE_PRAGMA = 19
 const m_SQLITE_PREPARE_DONT_LOG = 0x10
+const m_SQLITE_PREPARE_FROM_DDL = 0x20
 const m_SQLITE_PREPARE_NORMALIZE = 0x02
 const m_SQLITE_PREPARE_NO_VTAB = 0x04
 const m_SQLITE_PREPARE_PERSISTENT = 0x01
@@ -951,9 +956,9 @@ const m_SQLITE_SCANSTAT_NVISIT = 1
 const m_SQLITE_SCANSTAT_PARENTID = 6
 const m_SQLITE_SCANSTAT_SELECTID = 5
 const m_SQLITE_SCHEMA = 17
-const m_SQLITE_SCM_BRANCH = "branch-3.51"
-const m_SQLITE_SCM_DATETIME = "2026-03-13T10:38:09.694Z"
-const m_SQLITE_SCM_TAGS = "release version-3.51.3"
+const m_SQLITE_SCM_BRANCH = "trunk"
+const m_SQLITE_SCM_DATETIME = "2026-04-09T11:41:38.498Z"
+const m_SQLITE_SCM_TAGS = "release major-release version-3.53.0"
 const m_SQLITE_SELECT = 21
 const m_SQLITE_SELFORDER1 = 0x002000000
 const m_SQLITE_SERIALIZE_NOCOPY = 0x001
@@ -964,7 +969,7 @@ const m_SQLITE_SHM_LOCK = 2
 const m_SQLITE_SHM_NLOCK = 8
 const m_SQLITE_SHM_SHARED = 4
 const m_SQLITE_SHM_UNLOCK = 1
-const m_SQLITE_SOURCE_ID = "2026-03-13 10:38:09 737ae4a34738ffa0c3ff7f9bb18df914dd1cad163f28fd6b6e114a344fe6d618"
+const m_SQLITE_SOURCE_ID = "2026-04-09 11:41:38 4525003a53a7fc63ca75c59b22c79608659ca12f0131f52c18637f829977f20b"
 const m_SQLITE_STATUS_MALLOC_COUNT = 9
 const m_SQLITE_STATUS_MALLOC_SIZE = 5
 const m_SQLITE_STATUS_MEMORY_USED = 0
@@ -991,6 +996,7 @@ const m_SQLITE_SYNC_FULL = 0x00003
 const m_SQLITE_SYNC_NORMAL = 0x00002
 const m_SQLITE_TESTCTRL_ALWAYS = 13
 const m_SQLITE_TESTCTRL_ASSERT = 12
+const m_SQLITE_TESTCTRL_ATOF = 34
 const m_SQLITE_TESTCTRL_BENIGN_MALLOC_HOOKS = 10
 const m_SQLITE_TESTCTRL_BITVEC_TEST = 8
 const m_SQLITE_TESTCTRL_BYTEORDER = 22
@@ -1043,8 +1049,9 @@ const m_SQLITE_UTF16BE = 3
 const m_SQLITE_UTF16LE = 2
 const m_SQLITE_UTF16_ALIGNED = 8
 const m_SQLITE_UTF8 = 1
+const m_SQLITE_UTF8_ZT = 16
 const m_SQLITE_VEC_CHUNK_SIZE_MAX = 4096
-const m_SQLITE_VEC_DATE = "2026-03-17T08:25:43Z+0100"
+const m_SQLITE_VEC_DATE = "2026-03-31T09:59:06Z+0200"
 const m_SQLITE_VEC_DEBUG_BUILD_AVX = ""
 const m_SQLITE_VEC_DEBUG_BUILD_NEON = ""
 const m_SQLITE_VEC_NPY_FILE_NAME = "vec0-npy-file"
@@ -1052,12 +1059,12 @@ const m_SQLITE_VEC_SOURCE = ""
 const m_SQLITE_VEC_STATIC = 1
 const m_SQLITE_VEC_VEC0_K_MAX = 4096
 const m_SQLITE_VEC_VEC0_MAX_DIMENSIONS = 8192
-const m_SQLITE_VEC_VERSION = "v0.1.7"
+const m_SQLITE_VEC_VERSION = "v0.1.9"
 const m_SQLITE_VEC_VERSION_MAJOR = 0
 const m_SQLITE_VEC_VERSION_MINOR = 1
-const m_SQLITE_VEC_VERSION_PATCH = 6
-const m_SQLITE_VERSION = "3.51.3"
-const m_SQLITE_VERSION_NUMBER = 3051003
+const m_SQLITE_VEC_VERSION_PATCH = 9
+const m_SQLITE_VERSION = "3.53.0"
+const m_SQLITE_VERSION_NUMBER = 3053000
 const m_SQLITE_VTAB_CONSTRAINT_SUPPORT = 1
 const m_SQLITE_VTAB_DIRECTONLY = 3
 const m_SQLITE_VTAB_INNOCUOUS = 2
@@ -1088,6 +1095,7 @@ const m_TARGET_OS_NANO = 0
 const m_TARGET_OS_OSX = 1
 const m_TARGET_OS_SIMULATOR = 0
 const m_TARGET_OS_TV = 0
+const m_TARGET_OS_UEFI = 0
 const m_TARGET_OS_UIKITFORMAC = 0
 const m_TARGET_OS_UNIX = 0
 const m_TARGET_OS_VISION = 0
@@ -1200,9 +1208,10 @@ const m___APPLE_CC__ = 6000
 const m___APPLE__ = 1
 const m___ARM64_ARCH_8__ = 1
 const m___ARM_64BIT_STATE = 1
-const m___ARM_ACLE = 200
+const m___ARM_ACLE = 202420
 const m___ARM_ALIGN_MAX_STACK_PWR = 4
 const m___ARM_ARCH = 8
+const m___ARM_ARCH_8_2__ = 1
 const m___ARM_ARCH_8_3__ = 1
 const m___ARM_ARCH_8_4__ = 1
 const m___ARM_ARCH_8_5__ = 1
@@ -1239,6 +1248,7 @@ const m___ARM_FP16_ARGS = 1
 const m___ARM_FP16_FORMAT_IEEE = 1
 const m___ARM_NEON = 1
 const m___ARM_NEON_FP = 0xE
+const m___ARM_NEON_SVE_BRIDGE = 1
 const m___ARM_NEON__ = 1
 const m___ARM_PCS_AAPCS64 = 1
 const m___ARM_SIZEOF_MINIMAL_ENUM = 4
@@ -1257,10 +1267,12 @@ const m___AVAILABILITY_VERSIONS_VERSION_STRING = "Local"
 const m___BIGGEST_ALIGNMENT__ = 8
 const m___BITINT_MAXWIDTH__ = 128
 const m___BLOCKS__ = 1
-const m___BOOL_WIDTH__ = 8
+const m___BOOL_WIDTH__ = 1
 const m___BRIDGEOS_10_0 = 100000
 const m___BRIDGEOS_10_1 = 100100
 const m___BRIDGEOS_10_2 = 100200
+const m___BRIDGEOS_10_3 = 100300
+const m___BRIDGEOS_10_4 = 100400
 const m___BRIDGEOS_2_0 = 20000
 const m___BRIDGEOS_3_0 = 30000
 const m___BRIDGEOS_3_1 = 30100
@@ -1366,6 +1378,8 @@ const m___DRIVERKIT_24_6 = 240600
 const m___DRIVERKIT_25_0 = 250000
 const m___DRIVERKIT_25_1 = 250100
 const m___DRIVERKIT_25_2 = 250200
+const m___DRIVERKIT_25_3 = 250300
+const m___DRIVERKIT_25_4 = 250400
 const m___DYNAMIC__ = 1
 const m___ENABLE_LEGACY_MAC_AVAILABILITY = 1
 const m___ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ = 260000
@@ -1410,6 +1424,7 @@ const m___FPCLASS_QNAN = 0x0002
 const m___FPCLASS_SNAN = 0x0001
 const m___FP_FAST_FMA = 1
 const m___FP_FAST_FMAF = 1
+const m___FUNCTION_MULTI_VERSIONING_SUPPORT_LEVEL = 202430
 const m___FUNCTION__ = "__func__"
 const m___GCC_ASM_FLAG_OUTPUTS__ = 1
 const m___GCC_ATOMIC_BOOL_LOCK_FREE = 2
@@ -1424,7 +1439,7 @@ const m___GCC_ATOMIC_SHORT_LOCK_FREE = 2
 const m___GCC_ATOMIC_TEST_AND_SET_TRUEVAL = 1
 const m___GCC_ATOMIC_WCHAR_T_LOCK_FREE = 2
 const m___GCC_CONSTRUCTIVE_SIZE = 64
-const m___GCC_DESTRUCTIVE_SIZE = 64
+const m___GCC_DESTRUCTIVE_SIZE = 256
 const m___GCC_HAVE_DWARF2_CFI_ASM = 1
 const m___GCC_HAVE_SYNC_COMPARE_AND_SWAP_1 = 1
 const m___GCC_HAVE_SYNC_COMPARE_AND_SWAP_16 = 1
@@ -1567,6 +1582,8 @@ const m___IPHONE_19_0 = 190000
 const m___IPHONE_26_0 = 260000
 const m___IPHONE_26_1 = 260100
 const m___IPHONE_26_2 = 260200
+const m___IPHONE_26_3 = 260300
+const m___IPHONE_26_4 = 260400
 const m___IPHONE_2_0 = 20000
 const m___IPHONE_2_1 = 20100
 const m___IPHONE_2_2 = 20200
@@ -1687,8 +1704,8 @@ const m___MAC_16_0 = 160000
 const m___MAC_26_0 = 260000
 const m___MAC_26_1 = 260100
 const m___MAC_26_2 = 260200
-const m___MAC_OS_X_VERSION_MAX_ALLOWED = "__MAC_26_2"
-const m___MAC_OS_X_VERSION_MIN_REQUIRED = "__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__"
+const m___MAC_26_3 = 260300
+const m___MAC_26_4 = 260400
 const m___MEMORY_SCOPE_DEVICE = 1
 const m___MEMORY_SCOPE_SINGLE = 4
 const m___MEMORY_SCOPE_SYSTEM = 0
@@ -1835,6 +1852,8 @@ const m___TVOS_19_0 = 190000
 const m___TVOS_26_0 = 260000
 const m___TVOS_26_1 = 260100
 const m___TVOS_26_2 = 260200
+const m___TVOS_26_3 = 260300
+const m___TVOS_26_4 = 260400
 const m___TVOS_9_0 = 90000
 const m___TVOS_9_1 = 90100
 const m___TVOS_9_2 = 90200
@@ -1915,7 +1934,7 @@ const m___UINT_LEAST8_FMTu__ = "hhu"
 const m___UINT_LEAST8_FMTx__ = "hhx"
 const m___UINT_LEAST8_MAX__ = 255
 const m___USER_LABEL_PREFIX__ = "_"
-const m___VERSION__ = "Apple LLVM 17.0.0 (clang-1700.6.4.2)"
+const m___VERSION__ = "Apple LLVM 21.0.0 (clang-2100.0.123.102)"
 const m___VISIONOS_1_0 = 10000
 const m___VISIONOS_1_1 = 10100
 const m___VISIONOS_1_2 = 10200
@@ -1923,6 +1942,8 @@ const m___VISIONOS_1_3 = 10300
 const m___VISIONOS_26_0 = 260000
 const m___VISIONOS_26_1 = 260100
 const m___VISIONOS_26_2 = 260200
+const m___VISIONOS_26_3 = 260300
+const m___VISIONOS_26_4 = 260400
 const m___VISIONOS_2_0 = 20000
 const m___VISIONOS_2_1 = 20100
 const m___VISIONOS_2_2 = 20200
@@ -1951,6 +1972,8 @@ const m___WATCHOS_1_0 = 10000
 const m___WATCHOS_26_0 = 260000
 const m___WATCHOS_26_1 = 260100
 const m___WATCHOS_26_2 = 260200
+const m___WATCHOS_26_3 = 260300
+const m___WATCHOS_26_4 = 260400
 const m___WATCHOS_2_0 = 20000
 const m___WATCHOS_2_1 = 20100
 const m___WATCHOS_2_2 = 20200
@@ -1998,16 +2021,16 @@ const m___WINT_MAX__ = 2147483647
 const m___WINT_TYPE__ = "int"
 const m___WINT_WIDTH__ = 32
 const m___aarch64__ = 1
-const m___apple_build_version__ = 17000604
+const m___apple_build_version__ = 21000099
 const m___arm64 = 1
 const m___arm64__ = 1
 const m___bool_true_false_are_defined = 1
 const m___clang__ = 1
 const m___clang_literal_encoding__ = "UTF-8"
-const m___clang_major__ = 17
+const m___clang_major__ = 21
 const m___clang_minor__ = 0
 const m___clang_patchlevel__ = 0
-const m___clang_version__ = "17.0.0 (clang-1700.6.4.2)"
+const m___clang_version__ = "21.0.0 (clang-2100.0.123.102)"
 const m___clang_wide_literal_encoding__ = "UTF-32"
 const m___const = "const"
 const m___exported_hidden = "__private_extern__"
@@ -4145,7 +4168,7 @@ func Xarray_init(tls *libc.TLS, array uintptr, element_size Tsize_t, init_capaci
 	if !(z != 0) {
 		return int32(m_SQLITE_NOMEM)
 	}
-	libc.Xmemset(tls, z, 0, libc.Uint64FromInt32(sz))
+	libc.X__builtin___memset_chk(tls, z, 0, libc.Uint64FromInt32(sz), ^t__predefined_size_t(0))
 	(*TArray)(unsafe.Pointer(array)).Felement_size = element_size
 	(*TArray)(unsafe.Pointer(array)).Flength = uint64(0)
 	(*TArray)(unsafe.Pointer(array)).Fcapacity = init_capacity
@@ -4167,7 +4190,7 @@ func Xarray_append(tls *libc.TLS, array uintptr, element uintptr) (r int32) {
 			return int32(m_SQLITE_NOMEM)
 		}
 	}
-	libc.Xmemcpy(tls, (*TArray)(unsafe.Pointer(array)).Fz+uintptr((*TArray)(unsafe.Pointer(array)).Flength*(*TArray)(unsafe.Pointer(array)).Felement_size), element, (*TArray)(unsafe.Pointer(array)).Felement_size)
+	libc.X__builtin___memcpy_chk(tls, (*TArray)(unsafe.Pointer(array)).Fz+uintptr((*TArray)(unsafe.Pointer(array)).Flength*(*TArray)(unsafe.Pointer(array)).Felement_size), element, (*TArray)(unsafe.Pointer(array)).Felement_size, ^t__predefined_size_t(0))
 	(*TArray)(unsafe.Pointer(array)).Flength = (*TArray)(unsafe.Pointer(array)).Flength + 1
 	return m_SQLITE_OK
 }
@@ -4246,7 +4269,7 @@ func _fvec_from_value(tls *libc.TLS, value uintptr, vector uintptr, dimensions u
 			*(*uintptr)(unsafe.Pointer(pzErr)) = libsqlite3.Xsqlite3_mprintf(tls, __ccgo_ts+156, 0)
 			return int32(m_SQLITE_NOMEM)
 		}
-		libc.Xmemcpy(tls, buf, blob, libc.Uint64FromInt32(bytes))
+		libc.X__builtin___memcpy_chk(tls, buf, blob, libc.Uint64FromInt32(bytes), ^t__predefined_size_t(0))
 		*(*uintptr)(unsafe.Pointer(vector)) = buf
 		*(*Tsize_t)(unsafe.Pointer(dimensions)) = libc.Uint64FromInt32(bytes) / uint64(4)
 		*(*Tfvec_cleanup)(unsafe.Pointer(__ccgo_fp_cleanup)) = __ccgo_fp(libsqlite3.Xsqlite3_free)
@@ -4585,7 +4608,7 @@ func _vec_npy_file(tls *libc.TLS, context uintptr, argc int32, argv uintptr) {
 		libsqlite3.Xsqlite3_result_error_nomem(tls, context)
 		return
 	}
-	libc.Xmemset(tls, f, 0, uint64(16))
+	libc.X__builtin___memset_chk(tls, f, 0, uint64(16), ^t__predefined_size_t(0))
 	(*TVecNpyFile)(unsafe.Pointer(f)).Fpath = path
 	(*TVecNpyFile)(unsafe.Pointer(f)).FpathLength = pathLength
 	libsqlite3.Xsqlite3_result_pointer(tls, context, f, __ccgo_ts+674, __ccgo_fp(libsqlite3.Xsqlite3_free))
@@ -4902,7 +4925,7 @@ func _vec_quantize_binary(tls *libc.TLS, context uintptr, argc int32, argv uintp
 		goto cleanup
 		return
 	}
-	libc.Xmemset(tls, out, 0, libc.Uint64FromInt32(sz))
+	libc.X__builtin___memset_chk(tls, out, 0, libc.Uint64FromInt32(sz), ^t__predefined_size_t(0))
 	switch *(*_VectorElementType)(unsafe.Pointer(bp + 32)) {
 	case int32(_SQLITE_VEC_ELEMENT_TYPE_FLOAT32):
 		i = uint64(0)
@@ -4971,7 +4994,7 @@ func _vec_quantize_int8(tls *libc.TLS, context uintptr, argc int32, argv uintptr
 		libsqlite3.Xsqlite3_result_error_nomem(tls, context)
 		goto cleanup
 	}
-	libc.Xmemset(tls, out, 0, libc.Uint64FromInt32(sz))
+	libc.X__builtin___memset_chk(tls, out, 0, libc.Uint64FromInt32(sz), ^t__predefined_size_t(0))
 	if libsqlite3.Xsqlite3_value_type(tls, *(*uintptr)(unsafe.Pointer(argv + 1*8))) != int32(m_SQLITE_TEXT) || libc.Uint64FromInt32(libsqlite3.Xsqlite3_value_bytes(tls, *(*uintptr)(unsafe.Pointer(argv + 1*8)))) != libc.Xstrlen(tls, __ccgo_ts+1126) || libsqlite3.Xsqlite3_stricmp(tls, libsqlite3.Xsqlite3_value_text(tls, *(*uintptr)(unsafe.Pointer(argv + 1*8))), __ccgo_ts+1126) != 0 {
 		libsqlite3.Xsqlite3_result_error(tls, context, __ccgo_ts+1131, -int32(1))
 		libsqlite3.Xsqlite3_free(tls, out)
@@ -5037,7 +5060,7 @@ func _vec_add(tls *libc.TLS, context uintptr, argc int32, argv uintptr) {
 			libsqlite3.Xsqlite3_result_error_nomem(tls, context)
 			goto finish
 		}
-		libc.Xmemset(tls, out, 0, outSize)
+		libc.X__builtin___memset_chk(tls, out, 0, outSize, ^t__predefined_size_t(0))
 		i = uint64(0)
 		for {
 			if !(i < *(*Tsize_t)(unsafe.Pointer(bp + 16))) {
@@ -5059,7 +5082,7 @@ func _vec_add(tls *libc.TLS, context uintptr, argc int32, argv uintptr) {
 			libsqlite3.Xsqlite3_result_error_nomem(tls, context)
 			goto finish
 		}
-		libc.Xmemset(tls, out1, 0, outSize1)
+		libc.X__builtin___memset_chk(tls, out1, 0, outSize1, ^t__predefined_size_t(0))
 		i1 = uint64(0)
 		for {
 			if !(i1 < *(*Tsize_t)(unsafe.Pointer(bp + 16))) {
@@ -5116,7 +5139,7 @@ func _vec_sub(tls *libc.TLS, context uintptr, argc int32, argv uintptr) {
 			libsqlite3.Xsqlite3_result_error_nomem(tls, context)
 			goto finish
 		}
-		libc.Xmemset(tls, out, 0, outSize)
+		libc.X__builtin___memset_chk(tls, out, 0, outSize, ^t__predefined_size_t(0))
 		i = uint64(0)
 		for {
 			if !(i < *(*Tsize_t)(unsafe.Pointer(bp + 16))) {
@@ -5138,7 +5161,7 @@ func _vec_sub(tls *libc.TLS, context uintptr, argc int32, argv uintptr) {
 			libsqlite3.Xsqlite3_result_error_nomem(tls, context)
 			goto finish
 		}
-		libc.Xmemset(tls, out1, 0, outSize1)
+		libc.X__builtin___memset_chk(tls, out1, 0, outSize1, ^t__predefined_size_t(0))
 		i1 = uint64(0)
 		for {
 			if !(i1 < *(*Tsize_t)(unsafe.Pointer(bp + 16))) {
@@ -5215,7 +5238,7 @@ func _vec_slice(tls *libc.TLS, context uintptr, argc int32, argv uintptr) {
 			libsqlite3.Xsqlite3_result_error_nomem(tls, context)
 			goto done
 		}
-		libc.Xmemset(tls, out, 0, libc.Uint64FromInt32(outSize))
+		libc.X__builtin___memset_chk(tls, out, 0, libc.Uint64FromInt32(outSize), ^t__predefined_size_t(0))
 		i = uint64(0)
 		for {
 			if !(i < n) {
@@ -5237,7 +5260,7 @@ func _vec_slice(tls *libc.TLS, context uintptr, argc int32, argv uintptr) {
 			libsqlite3.Xsqlite3_result_error_nomem(tls, context)
 			return
 		}
-		libc.Xmemset(tls, out1, 0, libc.Uint64FromInt32(outSize1))
+		libc.X__builtin___memset_chk(tls, out1, 0, libc.Uint64FromInt32(outSize1), ^t__predefined_size_t(0))
 		i1 = uint64(0)
 		for {
 			if !(i1 < n) {
@@ -5267,7 +5290,7 @@ func _vec_slice(tls *libc.TLS, context uintptr, argc int32, argv uintptr) {
 			libsqlite3.Xsqlite3_result_error_nomem(tls, context)
 			return
 		}
-		libc.Xmemset(tls, out2, 0, libc.Uint64FromInt32(outSize2))
+		libc.X__builtin___memset_chk(tls, out2, 0, libc.Uint64FromInt32(outSize2), ^t__predefined_size_t(0))
 		i2 = uint64(0)
 		for {
 			if !(i2 < n/uint64(m___CHAR_BIT__)) {
@@ -5389,7 +5412,7 @@ func _vec_normalize(tls *libc.TLS, context uintptr, argc int32, argv uintptr) {
 		libsqlite3.Xsqlite3_result_error_code(tls, context, int32(m_SQLITE_NOMEM))
 		return
 	}
-	libc.Xmemset(tls, out, 0, libc.Uint64FromInt32(outSize))
+	libc.X__builtin___memset_chk(tls, out, 0, libc.Uint64FromInt32(outSize), ^t__predefined_size_t(0))
 	v = *(*uintptr)(unsafe.Pointer(bp))
 	norm = libc.Float32FromInt32(0)
 	i = uint64(0)
@@ -6089,7 +6112,7 @@ func _vec_eachConnect(tls *libc.TLS, db uintptr, pAux uintptr, argc int32, argv 
 		if pNew == uintptr(0) {
 			return int32(m_SQLITE_NOMEM)
 		}
-		libc.Xmemset(tls, pNew, 0, uint64(24))
+		libc.X__builtin___memset_chk(tls, pNew, 0, uint64(24), ^t__predefined_size_t(0))
 	}
 	return rc
 }
@@ -6110,7 +6133,7 @@ func _vec_eachOpen(tls *libc.TLS, p uintptr, ppCursor uintptr) (r int32) {
 	if pCur == uintptr(0) {
 		return int32(m_SQLITE_NOMEM)
 	}
-	libc.Xmemset(tls, pCur, 0, uint64(48))
+	libc.X__builtin___memset_chk(tls, pCur, 0, uint64(48), ^t__predefined_size_t(0))
 	*(*uintptr)(unsafe.Pointer(ppCursor)) = pCur
 	return m_SQLITE_OK
 }
@@ -6579,7 +6602,7 @@ func Xparse_npy_file(tls *libc.TLS, pVTab uintptr, file uintptr, pCur uintptr) (
 	major = (*(*[10]uint8)(unsafe.Pointer(bp)))[int32(6)]
 	minor = (*(*[10]uint8)(unsafe.Pointer(bp)))[int32(7)]
 	*(*Tuint16_t)(unsafe.Pointer(bp + 10)) = uint16(0)
-	libc.Xmemcpy(tls, bp+10, bp+8, uint64(2))
+	libc.X__builtin___memcpy_chk(tls, bp+10, bp+8, uint64(2), ^t__predefined_size_t(0))
 	totalHeaderLength = libc.Uint64FromInt64(6) + libc.Uint64FromInt64(1) + libc.Uint64FromInt64(1) + libc.Uint64FromInt64(2) + uint64(*(*Tuint16_t)(unsafe.Pointer(bp + 10)))
 	dataSize = libc.Int32FromUint64(libc.Uint64FromInt64(fileSize) - totalHeaderLength)
 	if dataSize < 0 {
@@ -6647,7 +6670,7 @@ func Xparse_npy_buffer(tls *libc.TLS, pVTab uintptr, buffer uintptr, bufferLengt
 	major = *(*uint8)(unsafe.Pointer(buffer + 6))
 	minor = *(*uint8)(unsafe.Pointer(buffer + 7))
 	*(*Tuint16_t)(unsafe.Pointer(bp)) = uint16(0)
-	libc.Xmemcpy(tls, bp, buffer+8, uint64(2))
+	libc.X__builtin___memcpy_chk(tls, bp, buffer+8, uint64(2), ^t__predefined_size_t(0))
 	totalHeaderLength = libc.Int32FromUint64(libc.Uint64FromInt64(6) + libc.Uint64FromInt64(1) + libc.Uint64FromInt64(1) + libc.Uint64FromInt64(2) + uint64(*(*Tuint16_t)(unsafe.Pointer(bp))))
 	dataSize = bufferLength - totalHeaderLength
 	if dataSize < 0 {
@@ -6683,7 +6706,7 @@ func _vec_npy_eachConnect(tls *libc.TLS, db uintptr, pAux uintptr, argc int32, a
 		if pNew == uintptr(0) {
 			return int32(m_SQLITE_NOMEM)
 		}
-		libc.Xmemset(tls, pNew, 0, uint64(24))
+		libc.X__builtin___memset_chk(tls, pNew, 0, uint64(24), ^t__predefined_size_t(0))
 	}
 	return rc
 }
@@ -6704,7 +6727,7 @@ func _vec_npy_eachOpen(tls *libc.TLS, p uintptr, ppCursor uintptr) (r int32) {
 	if pCur == uintptr(0) {
 		return int32(m_SQLITE_NOMEM)
 	}
-	libc.Xmemset(tls, pCur, 0, uint64(112))
+	libc.X__builtin___memset_chk(tls, pCur, 0, uint64(112), ^t__predefined_size_t(0))
 	*(*uintptr)(unsafe.Pointer(ppCursor)) = pCur
 	return m_SQLITE_OK
 }
@@ -8145,7 +8168,7 @@ func _vec0_init(tls *libc.TLS, db uintptr, pAux uintptr, argc int32, argv uintpt
 	if pNew == uintptr(0) {
 		return int32(m_SQLITE_NOMEM)
 	}
-	libc.Xmemset(tls, pNew, 0, uint64(2032))
+	libc.X__builtin___memset_chk(tls, pNew, 0, uint64(2032), ^t__predefined_size_t(0))
 	// Declared chunk_size=N for entire table.
 	// -1 to use the defualt, otherwise will get re-assigned on `chunk_size=N`
 	// option
@@ -8183,7 +8206,7 @@ func _vec0_init(tls *libc.TLS, db uintptr, pAux uintptr, argc int32, argv uintpt
 			}
 			*(*Tvec0_user_column_kind)(unsafe.Pointer(pNew + 88 + uintptr(user_column_idx)*4)) = int32(_SQLITE_VEC0_USER_COLUMN_KIND_VECTOR)
 			*(*Tuint8_t)(unsafe.Pointer(pNew + 296 + uintptr(user_column_idx))) = libc.Uint8FromInt32(numVectorColumns)
-			libc.Xmemcpy(tls, pNew+608+uintptr(numVectorColumns)*32, bp, uint64(32))
+			libc.X__builtin___memcpy_chk(tls, pNew+608+uintptr(numVectorColumns)*32, bp, uint64(32), ^t__predefined_size_t(0))
 			numVectorColumns = numVectorColumns + 1
 			(*Tvec0_vtab)(unsafe.Pointer(pNew)).FnumVectorColumns = numVectorColumns
 			user_column_idx = user_column_idx + 1
@@ -8205,7 +8228,7 @@ func _vec0_init(tls *libc.TLS, db uintptr, pAux uintptr, argc int32, argv uintpt
 			}
 			*(*Tvec0_user_column_kind)(unsafe.Pointer(pNew + 88 + uintptr(user_column_idx)*4)) = int32(_SQLITE_VEC0_USER_COLUMN_KIND_PARTITION)
 			*(*Tuint8_t)(unsafe.Pointer(pNew + 296 + uintptr(user_column_idx))) = libc.Uint8FromInt32(numPartitionColumns)
-			libc.Xmemcpy(tls, pNew+1120+uintptr(numPartitionColumns)*24, bp+32, uint64(24))
+			libc.X__builtin___memcpy_chk(tls, pNew+1120+uintptr(numPartitionColumns)*24, bp+32, uint64(24), ^t__predefined_size_t(0))
 			numPartitionColumns = numPartitionColumns + 1
 			(*Tvec0_vtab)(unsafe.Pointer(pNew)).FnumPartitionColumns = numPartitionColumns
 			user_column_idx = user_column_idx + 1
@@ -8239,7 +8262,7 @@ func _vec0_init(tls *libc.TLS, db uintptr, pAux uintptr, argc int32, argv uintpt
 			}
 			*(*Tvec0_user_column_kind)(unsafe.Pointer(pNew + 88 + uintptr(user_column_idx)*4)) = int32(_SQLITE_VEC0_USER_COLUMN_KIND_AUXILIARY)
 			*(*Tuint8_t)(unsafe.Pointer(pNew + 296 + uintptr(user_column_idx))) = libc.Uint8FromInt32(numAuxiliaryColumns)
-			libc.Xmemcpy(tls, pNew+1216+uintptr(numAuxiliaryColumns)*24, bp+56, uint64(24))
+			libc.X__builtin___memcpy_chk(tls, pNew+1216+uintptr(numAuxiliaryColumns)*24, bp+56, uint64(24), ^t__predefined_size_t(0))
 			numAuxiliaryColumns = numAuxiliaryColumns + 1
 			(*Tvec0_vtab)(unsafe.Pointer(pNew)).FnumAuxiliaryColumns = numAuxiliaryColumns
 			user_column_idx = user_column_idx + 1
@@ -8260,7 +8283,7 @@ func _vec0_init(tls *libc.TLS, db uintptr, pAux uintptr, argc int32, argv uintpt
 			}
 			*(*Tvec0_user_column_kind)(unsafe.Pointer(pNew + 88 + uintptr(user_column_idx)*4)) = int32(_SQLITE_VEC0_USER_COLUMN_KIND_METADATA)
 			*(*Tuint8_t)(unsafe.Pointer(pNew + 296 + uintptr(user_column_idx))) = libc.Uint8FromInt32(numMetadataColumns)
-			libc.Xmemcpy(tls, pNew+1600+uintptr(numMetadataColumns)*24, bp+80, uint64(24))
+			libc.X__builtin___memcpy_chk(tls, pNew+1600+uintptr(numMetadataColumns)*24, bp+80, uint64(24), ^t__predefined_size_t(0))
 			numMetadataColumns = numMetadataColumns + 1
 			(*Tvec0_vtab)(unsafe.Pointer(pNew)).FnumMetadataColumns = numMetadataColumns
 			user_column_idx = user_column_idx + 1
@@ -8736,7 +8759,7 @@ func _vec0Open(tls *libc.TLS, p uintptr, ppCursor uintptr) (r int32) {
 	if pCur == uintptr(0) {
 		return int32(m_SQLITE_NOMEM)
 	}
-	libc.Xmemset(tls, pCur, 0, uint64(40))
+	libc.X__builtin___memset_chk(tls, pCur, 0, uint64(40), ^t__predefined_size_t(0))
 	*(*uintptr)(unsafe.Pointer(ppCursor)) = pCur
 	return m_SQLITE_OK
 }
@@ -9238,7 +9261,7 @@ func Xbitmap_new(tls *libc.TLS, n Ti32) (r uintptr) {
 	_ = p
 	p = libsqlite3.Xsqlite3_malloc(tls, libc.Int32FromUint64(libc.Uint64FromInt32(n)*uint64(1)/uint64(m___CHAR_BIT__)))
 	if p != 0 {
-		libc.Xmemset(tls, p, 0, libc.Uint64FromInt32(n)*uint64(1)/uint64(m___CHAR_BIT__))
+		libc.X__builtin___memset_chk(tls, p, 0, libc.Uint64FromInt32(n)*uint64(1)/uint64(m___CHAR_BIT__), ^t__predefined_size_t(0))
 	}
 	return p
 }
@@ -9248,13 +9271,13 @@ func Xbitmap_new_from(tls *libc.TLS, n Ti32, from uintptr) (r uintptr) {
 	_ = p
 	p = libsqlite3.Xsqlite3_malloc(tls, libc.Int32FromUint64(libc.Uint64FromInt32(n)*uint64(1)/uint64(m___CHAR_BIT__)))
 	if p != 0 {
-		libc.Xmemcpy(tls, p, from, libc.Uint64FromInt32(n/int32(m___CHAR_BIT__)))
+		libc.X__builtin___memcpy_chk(tls, p, from, libc.Uint64FromInt32(n/int32(m___CHAR_BIT__)), ^t__predefined_size_t(0))
 	}
 	return p
 }
 
 func Xbitmap_copy(tls *libc.TLS, base uintptr, from uintptr, n Ti32) {
-	libc.Xmemcpy(tls, base, from, libc.Uint64FromInt32(n/int32(m___CHAR_BIT__)))
+	libc.X__builtin___memcpy_chk(tls, base, from, libc.Uint64FromInt32(n/int32(m___CHAR_BIT__)), ^t__predefined_size_t(0))
 }
 
 func Xbitmap_and_inplace(tls *libc.TLS, base uintptr, other uintptr, n Ti32) {
@@ -9290,11 +9313,11 @@ func Xbitmap_get(tls *libc.TLS, bitmap uintptr, position Ti32) (r int32) {
 }
 
 func Xbitmap_clear(tls *libc.TLS, bitmap uintptr, n Ti32) {
-	libc.Xmemset(tls, bitmap, 0, libc.Uint64FromInt32(n/int32(m___CHAR_BIT__)))
+	libc.X__builtin___memset_chk(tls, bitmap, 0, libc.Uint64FromInt32(n/int32(m___CHAR_BIT__)), ^t__predefined_size_t(0))
 }
 
 func Xbitmap_fill(tls *libc.TLS, bitmap uintptr, n Ti32) {
-	libc.Xmemset(tls, bitmap, int32(0xFF), libc.Uint64FromInt32(n/int32(m___CHAR_BIT__)))
+	libc.X__builtin___memset_chk(tls, bitmap, int32(0xFF), libc.Uint64FromInt32(n/int32(m___CHAR_BIT__)), ^t__predefined_size_t(0))
 }
 
 // C documentation
@@ -10285,25 +10308,25 @@ func Xvec0Filter_knn_chunks_iter(tls *libc.TLS, p uintptr, stmtChunks uintptr, v
 		rc = int32(m_SQLITE_NOMEM)
 		goto cleanup
 	}
-	libc.Xmemset(tls, topk_rowids, 0, uint64(libc.Uint64FromInt64(k)*uint64(8)))
+	libc.X__builtin___memset_chk(tls, topk_rowids, 0, uint64(libc.Uint64FromInt64(k)*uint64(8)), ^t__predefined_size_t(0))
 	topk_distances = libsqlite3.Xsqlite3_malloc(tls, libc.Int32FromUint64(libc.Uint64FromInt64(k)*uint64(4)))
 	if !(topk_distances != 0) {
 		rc = int32(m_SQLITE_NOMEM)
 		goto cleanup
 	}
-	libc.Xmemset(tls, topk_distances, 0, uint64(libc.Uint64FromInt64(k)*uint64(4)))
+	libc.X__builtin___memset_chk(tls, topk_distances, 0, uint64(libc.Uint64FromInt64(k)*uint64(4)), ^t__predefined_size_t(0))
 	tmp_topk_rowids = libsqlite3.Xsqlite3_malloc(tls, libc.Int32FromUint64(libc.Uint64FromInt64(k)*uint64(8)))
 	if !(tmp_topk_rowids != 0) {
 		rc = int32(m_SQLITE_NOMEM)
 		goto cleanup
 	}
-	libc.Xmemset(tls, tmp_topk_rowids, 0, uint64(libc.Uint64FromInt64(k)*uint64(8)))
+	libc.X__builtin___memset_chk(tls, tmp_topk_rowids, 0, uint64(libc.Uint64FromInt64(k)*uint64(8)), ^t__predefined_size_t(0))
 	tmp_topk_distances = libsqlite3.Xsqlite3_malloc(tls, libc.Int32FromUint64(libc.Uint64FromInt64(k)*uint64(4)))
 	if !(tmp_topk_distances != 0) {
 		rc = int32(m_SQLITE_NOMEM)
 		goto cleanup
 	}
-	libc.Xmemset(tls, tmp_topk_distances, 0, uint64(libc.Uint64FromInt64(k)*uint64(4)))
+	libc.X__builtin___memset_chk(tls, tmp_topk_distances, 0, uint64(libc.Uint64FromInt64(k)*uint64(4)), ^t__predefined_size_t(0))
 	k_used = 0
 	baseVectorsSize = libc.Int64FromUint64(libc.Uint64FromInt32((*Tvec0_vtab)(unsafe.Pointer(p)).Fchunk_size) * Xvector_column_byte_size(tls, *(*TVectorColumnDefinition)(unsafe.Pointer(vector_column))))
 	baseVectors = libsqlite3.Xsqlite3_malloc(tls, int32(baseVectorsSize))
@@ -10341,7 +10364,7 @@ func Xvec0Filter_knn_chunks_iter(tls *libc.TLS, p uintptr, stmtChunks uintptr, v
 		rc = int32(m_SQLITE_NOMEM)
 		goto cleanup
 	}
-	libc.Xmemset(tls, bp+8, 0, libc.Uint64FromInt64(8)*libc.Uint64FromInt32(m_VEC0_MAX_METADATA_COLUMNS))
+	libc.X__builtin___memset_chk(tls, bp+8, 0, libc.Uint64FromInt64(8)*libc.Uint64FromInt32(m_VEC0_MAX_METADATA_COLUMNS), ^t__predefined_size_t(0))
 	bmMetadata = Xbitmap_new(tls, (*Tvec0_vtab)(unsafe.Pointer(p)).Fchunk_size)
 	if !(bmMetadata != 0) {
 		rc = int32(m_SQLITE_NOMEM)
@@ -10380,8 +10403,8 @@ func Xvec0Filter_knn_chunks_iter(tls *libc.TLS, p uintptr, stmtChunks uintptr, v
 			rc = int32(m_SQLITE_ERROR)
 			goto cleanup
 		}
-		libc.Xmemset(tls, chunk_distances, 0, libc.Uint64FromInt32((*Tvec0_vtab)(unsafe.Pointer(p)).Fchunk_size)*uint64(4))
-		libc.Xmemset(tls, chunk_topk_idxs, 0, uint64(libc.Uint64FromInt64(k)*uint64(4)))
+		libc.X__builtin___memset_chk(tls, chunk_distances, 0, libc.Uint64FromInt32((*Tvec0_vtab)(unsafe.Pointer(p)).Fchunk_size)*uint64(4), ^t__predefined_size_t(0))
+		libc.X__builtin___memset_chk(tls, chunk_topk_idxs, 0, uint64(libc.Uint64FromInt64(k)*uint64(4)), ^t__predefined_size_t(0))
 		Xbitmap_clear(tls, b, (*Tvec0_vtab)(unsafe.Pointer(p)).Fchunk_size)
 		chunk_id = libsqlite3.Xsqlite3_column_int64(tls, stmtChunks, 0)
 		chunkValidity = libsqlite3.Xsqlite3_column_blob(tls, stmtChunks, int32(1))
@@ -10715,7 +10738,7 @@ func Xvec0Filter_knn(tls *libc.TLS, pCur uintptr, p uintptr, idxNum int32, idxSt
 	if !(knn_data != 0) {
 		return int32(m_SQLITE_NOMEM)
 	}
-	libc.Xmemset(tls, knn_data, 0, uint64(40))
+	libc.X__builtin___memset_chk(tls, knn_data, 0, uint64(40), ^t__predefined_size_t(0))
 	// array of `struct Vec0MetadataIn`, IF there are any `xxx in (...)` metadata constraints
 	aMetadataIn = libc.UintptrFromInt32(0)
 	query_idx = -int32(1)
@@ -10784,7 +10807,7 @@ func Xvec0Filter_knn(tls *libc.TLS, pCur uintptr, p uintptr, idxNum int32, idxSt
 			rc1 = int32(m_SQLITE_NOMEM)
 			goto cleanup
 		}
-		libc.Xmemset(tls, arrayRowidsIn, 0, uint64(32))
+		libc.X__builtin___memset_chk(tls, arrayRowidsIn, 0, uint64(32), ^t__predefined_size_t(0))
 		rc1 = Xarray_init(tls, arrayRowidsIn, uint64(8), uint64(32))
 		if rc1 != m_SQLITE_OK {
 			goto cleanup
@@ -10832,13 +10855,13 @@ func Xvec0Filter_knn(tls *libc.TLS, pCur uintptr, p uintptr, idxNum int32, idxSt
 				rc = int32(m_SQLITE_NOMEM)
 				goto cleanup
 			}
-			libc.Xmemset(tls, aMetadataIn, 0, uint64(32))
+			libc.X__builtin___memset_chk(tls, aMetadataIn, 0, uint64(32), ^t__predefined_size_t(0))
 			rc = Xarray_init(tls, aMetadataIn, uint64(40), uint64(8))
 			if rc != m_SQLITE_OK {
 				goto cleanup
 			}
 		}
-		libc.Xmemset(tls, bp+64, 0, uint64(40))
+		libc.X__builtin___memset_chk(tls, bp+64, 0, uint64(40), ^t__predefined_size_t(0))
 		(*(*TVec0MetadataIn)(unsafe.Pointer(bp + 64))).Fmetadata_idx = metadata_idx
 		(*(*TVec0MetadataIn)(unsafe.Pointer(bp + 64))).Fargv_idx = i1
 		switch (*(*TVec0MetadataColumnDefinition)(unsafe.Pointer(p + 1600 + uintptr(metadata_idx)*24))).Fkind {
@@ -10984,7 +11007,7 @@ func Xvec0Filter_fullscan(tls *libc.TLS, p uintptr, pCur uintptr) (r int32) {
 	if !(fullscan_data != 0) {
 		return int32(m_SQLITE_NOMEM)
 	}
-	libc.Xmemset(tls, fullscan_data, 0, uint64(16))
+	libc.X__builtin___memset_chk(tls, fullscan_data, 0, uint64(16), ^t__predefined_size_t(0))
 	zSql = libsqlite3.Xsqlite3_mprintf(tls, __ccgo_ts+10644, libc.VaList(bp+8, (*Tvec0_vtab)(unsafe.Pointer(p)).FschemaName, (*Tvec0_vtab)(unsafe.Pointer(p)).FtableName))
 	if !(zSql != 0) {
 		rc = int32(m_SQLITE_NOMEM)
@@ -11027,7 +11050,7 @@ func Xvec0Filter_point(tls *libc.TLS, pCur uintptr, p uintptr, argc int32, argv 
 		rc = int32(m_SQLITE_NOMEM)
 		goto error
 	}
-	libc.Xmemset(tls, point_data, 0, uint64(144))
+	libc.X__builtin___memset_chk(tls, point_data, 0, uint64(144), ^t__predefined_size_t(0))
 	if (*Tvec0_vtab)(unsafe.Pointer(p)).FpkIsText != 0 {
 		rc = Xvec0_rowid_from_id(tls, p, *(*uintptr)(unsafe.Pointer(argv)), bp)
 		if rc == int32(m_SQLITE_EMPTY) {
@@ -11854,14 +11877,14 @@ func Xvec0_write_metadata_value(tls *libc.TLS, p uintptr, metadata_column_idx in
 		}
 		s = libsqlite3.Xsqlite3_value_text(tls, v)
 		*(*int32)(unsafe.Pointer(bp + 36)) = libsqlite3.Xsqlite3_value_bytes(tls, v)
-		libc.Xmemset(tls, bp+40, 0, uint64(m_VEC0_METADATA_TEXT_VIEW_BUFFER_LENGTH))
-		libc.Xmemcpy(tls, bp+40, bp+36, uint64(4))
+		libc.X__builtin___memset_chk(tls, bp+40, 0, uint64(m_VEC0_METADATA_TEXT_VIEW_BUFFER_LENGTH), ^t__predefined_size_t(0))
+		libc.X__builtin___memcpy_chk(tls, bp+40, bp+36, uint64(4), ^t__predefined_size_t(0))
 		if *(*int32)(unsafe.Pointer(bp + 36)) <= libc.Int32FromInt32(m_VEC0_METADATA_TEXT_VIEW_BUFFER_LENGTH)-libc.Int32FromInt32(4) {
 			v1 = *(*int32)(unsafe.Pointer(bp + 36))
 		} else {
 			v1 = libc.Int32FromInt32(m_VEC0_METADATA_TEXT_VIEW_BUFFER_LENGTH) - libc.Int32FromInt32(4)
 		}
-		libc.Xmemcpy(tls, bp+40+uintptr(4), s, libc.Uint64FromInt32(v1))
+		libc.X__builtin___memcpy_chk(tls, bp+40+uintptr(4), s, libc.Uint64FromInt32(v1), ^t__predefined_size_t(0))
 		rc = libsqlite3.Xsqlite3_blob_write(tls, *(*uintptr)(unsafe.Pointer(bp)), bp+40, int32(m_VEC0_METADATA_TEXT_VIEW_BUFFER_LENGTH), int32(chunk_offset*int64(m_VEC0_METADATA_TEXT_VIEW_BUFFER_LENGTH)))
 		if *(*int32)(unsafe.Pointer(bp + 36)) > int32(m_VEC0_METADATA_TEXT_VIEW_DATA_LENGTH) {
 			if isupdate != 0 && *(*int32)(unsafe.Pointer(bp + 32)) > int32(m_VEC0_METADATA_TEXT_VIEW_DATA_LENGTH) {
@@ -12264,7 +12287,7 @@ func Xvec0Update_Delete_ClearVectors(tls *libc.TLS, p uintptr, chunk_id Ti64, ch
 			libsqlite3.Xsqlite3_blob_close(tls, *(*uintptr)(unsafe.Pointer(bp)))
 			return int32(m_SQLITE_NOMEM)
 		}
-		libc.Xmemset(tls, zeroBuf, 0, n)
+		libc.X__builtin___memset_chk(tls, zeroBuf, 0, n, ^t__predefined_size_t(0))
 		rc = libsqlite3.Xsqlite3_blob_write(tls, *(*uintptr)(unsafe.Pointer(bp)), zeroBuf, libc.Int32FromUint64(n), libc.Int32FromUint64(chunk_offset*n))
 		libsqlite3.Xsqlite3_free(tls, zeroBuf)
 		if rc != m_SQLITE_OK {
@@ -12511,7 +12534,7 @@ func Xvec0Update_Delete_ClearMetadata(tls *libc.TLS, p uintptr, metadata_idx int
 		if rc != m_SQLITE_OK {
 			goto done
 		}
-		libc.Xmemset(tls, bp+36, 0, uint64(m_VEC0_METADATA_TEXT_VIEW_BUFFER_LENGTH))
+		libc.X__builtin___memset_chk(tls, bp+36, 0, uint64(m_VEC0_METADATA_TEXT_VIEW_BUFFER_LENGTH), ^t__predefined_size_t(0))
 		rc = libsqlite3.Xsqlite3_blob_write(tls, *(*uintptr)(unsafe.Pointer(bp)), bp+36, int32(16), libc.Int32FromUint64(chunk_offset*uint64(m_VEC0_METADATA_TEXT_VIEW_BUFFER_LENGTH)))
 		if rc != m_SQLITE_OK {
 			goto done
@@ -12528,11 +12551,17 @@ func Xvec0Update_Delete_ClearMetadata(tls *libc.TLS, p uintptr, metadata_idx int
 			}
 			libsqlite3.Xsqlite3_bind_int64(tls, *(*uintptr)(unsafe.Pointer(bp + 56)), int32(1), rowid)
 			rc = libsqlite3.Xsqlite3_step(tls, *(*uintptr)(unsafe.Pointer(bp + 56)))
+			libsqlite3.Xsqlite3_finalize(tls, *(*uintptr)(unsafe.Pointer(bp + 56)))
 			if rc != int32(m_SQLITE_DONE) {
 				rc = int32(m_SQLITE_ERROR)
 				goto done
 			}
-			libsqlite3.Xsqlite3_finalize(tls, *(*uintptr)(unsafe.Pointer(bp + 56)))
+			// Fix for https://github.com/asg017/sqlite-vec/issues/274
+			// sqlite3_step returns SQLITE_DONE (101) on DML success, but the
+			// `done:` epilogue treats anything other than SQLITE_OK as an error.
+			// Without this, SQLITE_DONE propagates up to vec0Update_Delete,
+			// which aborts the DELETE scan and silently drops remaining rows.
+			rc = m_SQLITE_OK
 		}
 		break
 	}
@@ -13008,7 +13037,7 @@ func _vec_static_blob_from_raw(tls *libc.TLS, context uintptr, argc int32, argv 
 		libsqlite3.Xsqlite3_result_error_nomem(tls, context)
 		return
 	}
-	libc.Xmemset(tls, p, 0, uint64(32))
+	libc.X__builtin___memset_chk(tls, p, 0, uint64(32), ^t__predefined_size_t(0))
 	(*Tstatic_blob_definition)(unsafe.Pointer(p)).Fp = uintptr(libsqlite3.Xsqlite3_value_int64(tls, *(*uintptr)(unsafe.Pointer(argv))))
 	(*Tstatic_blob_definition)(unsafe.Pointer(p)).Felement_type = int32(_SQLITE_VEC_ELEMENT_TYPE_FLOAT32)
 	(*Tstatic_blob_definition)(unsafe.Pointer(p)).Fdimensions = libc.Uint64FromInt64(libsqlite3.Xsqlite3_value_int64(tls, *(*uintptr)(unsafe.Pointer(argv + 2*8))))
@@ -13060,7 +13089,7 @@ func _vec_static_blobsConnect(tls *libc.TLS, db uintptr, pAux uintptr, argc int3
 		if pNew == uintptr(0) {
 			return int32(m_SQLITE_NOMEM)
 		}
-		libc.Xmemset(tls, pNew, 0, uint64(32))
+		libc.X__builtin___memset_chk(tls, pNew, 0, uint64(32), ^t__predefined_size_t(0))
 		(*Tvec_static_blobs_vtab)(unsafe.Pointer(pNew)).Fdata = pAux
 	}
 	return rc
@@ -13130,7 +13159,7 @@ func _vec_static_blobsOpen(tls *libc.TLS, p uintptr, ppCursor uintptr) (r int32)
 	if pCur == uintptr(0) {
 		return int32(m_SQLITE_NOMEM)
 	}
-	libc.Xmemset(tls, pCur, 0, uint64(16))
+	libc.X__builtin___memset_chk(tls, pCur, 0, uint64(16), ^t__predefined_size_t(0))
 	*(*uintptr)(unsafe.Pointer(ppCursor)) = pCur
 	return m_SQLITE_OK
 }
@@ -13315,7 +13344,7 @@ func _vec_static_blob_entriesConnect(tls *libc.TLS, db uintptr, pAux uintptr, ar
 		if pNew == uintptr(0) {
 			return int32(m_SQLITE_NOMEM)
 		}
-		libc.Xmemset(tls, pNew, 0, uint64(32))
+		libc.X__builtin___memset_chk(tls, pNew, 0, uint64(32), ^t__predefined_size_t(0))
 		(*Tvec_static_blob_entries_vtab)(unsafe.Pointer(pNew)).Fblob = blob_data + uintptr(idx)*40
 	}
 	return rc
@@ -13341,7 +13370,7 @@ func _vec_static_blob_entriesOpen(tls *libc.TLS, p uintptr, ppCursor uintptr) (r
 	if pCur == uintptr(0) {
 		return int32(m_SQLITE_NOMEM)
 	}
-	libc.Xmemset(tls, pCur, 0, uint64(32))
+	libc.X__builtin___memset_chk(tls, pCur, 0, uint64(32), ^t__predefined_size_t(0))
 	*(*uintptr)(unsafe.Pointer(ppCursor)) = pCur
 	return m_SQLITE_OK
 }
@@ -13462,7 +13491,7 @@ func _vec_static_blob_entriesFilter(tls *libc.TLS, pVtabCursor uintptr, idxNum i
 		if !(knn_data != 0) {
 			return int32(m_SQLITE_NOMEM)
 		}
-		libc.Xmemset(tls, knn_data, 0, uint64(40))
+		libc.X__builtin___memset_chk(tls, knn_data, 0, uint64(40), ^t__predefined_size_t(0))
 		rc = Xvector_from_value(tls, *(*uintptr)(unsafe.Pointer(argv)), bp, bp+8, bp+16, bp+24, bp+32)
 		if rc != m_SQLITE_OK {
 			return int32(m_SQLITE_ERROR)
@@ -13829,7 +13858,7 @@ func Xsqlite3_vec_static_blobs_init(tls *libc.TLS, db uintptr, pzErrMsg uintptr,
 	if !(static_blob_data != 0) {
 		return int32(m_SQLITE_NOMEM)
 	}
-	libc.Xmemset(tls, static_blob_data, 0, uint64(640))
+	libc.X__builtin___memset_chk(tls, static_blob_data, 0, uint64(640), ^t__predefined_size_t(0))
 	rc = libsqlite3.Xsqlite3_create_function_v2(tls, db, __ccgo_ts+16509, int32(4), libc.Int32FromInt32(m_SQLITE_UTF8)|libc.Int32FromInt32(m_SQLITE_INNOCUOUS)|libc.Int32FromInt32(m_SQLITE_DETERMINISTIC)|libc.Int32FromInt32(m_SQLITE_SUBTYPE)|libc.Int32FromInt32(m_SQLITE_RESULT_SUBTYPE), libc.UintptrFromInt32(0), __ccgo_fp(_vec_static_blob_from_raw), libc.UintptrFromInt32(0), libc.UintptrFromInt32(0), libc.UintptrFromInt32(0))
 	if rc != m_SQLITE_OK {
 		return rc
@@ -13875,4 +13904,4 @@ func __ccgo_fp(f interface{}) uintptr {
 
 var __ccgo_ts = (*reflect.StringHeader)(unsafe.Pointer(&__ccgo_ts1)).Data
 
-var __ccgo_ts1 = "float32\x00int8\x00bit\x00\x00INTEGER\x00BLOB\x00TEXT\x00FLOAT\x00NULL\x00zero-length vectors are not supported.\x00invalid float32 vector BLOB length. Must be divisible by %d, found %d\x00out of memory\x00JSON array parsing error: Input does not start with '['\x00JSON parsing error\x00Input must have type BLOB (compact format) or TEXT (JSON), found %s\x00Unknown type for bitvector.\x00JSON parsing error: value out of range for int8\x00Unknown type for int8 vector.\x00Unknown subtype: %d\x00Error reading 1st vector: %s\x00Error reading 2nd vector: %s\x00Vector type mistmatch. First vector has type %s, while the second has type %s.\x00Vector dimension mistmatch. First vector has %ld dimensions, while the second has %ld dimensions.\x00vec0-npy-file\x00Cannot calculate cosine distance between two bitvectors.\x00Cannot calculate L2 distance between two bitvectors.\x00Cannot calculate L1 distance between two bitvectors.\x00Cannot calculate hamming distance between two float32 vectors.\x00Cannot calculate hamming distance between two int8 vectors.\x00Zero length vectors are not supported.\x00Binary quantization requires vectors with a length divisible by 8\x00Can only binary quantize float or int8 vectors\x00unit\x002nd argument to vec_quantize_int8() must be 'unit'.\x00Cannot add two bitvectors together.\x00Cannot subtract two bitvectors together.\x00slice 'start' index must be a postive number.\x00slice 'end' index must be a postive number.\x00slice 'start' index is greater than the number of dimensions\x00slice 'end' index is greater than the number of dimensions\x00slice 'start' index is greater than 'end' index\x00slice 'start' index is equal to the 'end' index, vectors must have non-zero length\x00start index must be divisible by 8.\x00end index must be divisible by 8.\x00[\x00,\x00null\x00%f\x00%d\x00]\x00only float32 vectors are supported when normalizing\x00text\x00int\x00integer\x00partition\x00key\x00float\x00double\x00blob\x00boolean\x00bool\x00int64\x00integer64\x00float64\x00f64\x00primary\x00f32\x00i8\x00distance_metric\x00l2\x00l1\x00cosine\x00%.*s\x00CREATE TABLE x(value, vector hidden)\x00False\x00Error parsing numpy array: numpy header did not start with '{'\x00Error parsing numpy array: expected key in numpy header\x00Error parsing numpy array: expected a string as key in numpy header\x00Error parsing numpy array: expected a ':' after key in numpy header\x00'descr'\x00Error parsing numpy array: expected a string value after 'descr' key\x00'<f4'\x00Error parsing numpy array: Only '<f4' values are supported in sqlite-vec numpy functions\x00'fortran_order'\x00Error parsing numpy array: Only fortran_order = False is supported in sqlite-vec numpy functions\x00'shape'\x00Error parsing numpy array: Expected left parenthesis '(' after shape key\x00Error parsing numpy array: Expected an initial number in shape value\x00Error parsing numpy array: Expected comma after first shape value\x00Error parsing numpy array: unexpected header EOF while parsing shape\x00Error parsing numpy array: expected right parenthesis after shape value\x00Error parsing numpy array: unknown type in shape value\x00Error parsing numpy array: unknown key in numpy header\x00Error parsing numpy array: unknown extra token after value\x00numpy array file too short\x00numpy array file does not contain the 'magic' header\x00numpy array file header length is invalid\x00numpy array file error: Expected a data size of %d, found %d\x00numpy array too short\x00numpy array does not contain the 'magic' header\x00numpy array header length is invalid\x00numpy array error: Expected a data size of %d, found %d\x00CREATE TABLE x(vector, input hidden)\x00input argument is required\x00r\x00Could not open numpy file\x00vec_npy_each only supports float32 vectors\x00SELECT id, chunk_id, chunk_offset FROM \"%w\".\"%w_rowids\" WHERE rowid = ?\x00Internal sqlite-vec error: could not initialize 'rowids get chunk position' statement\x00SELECT rowid FROM \"%w\".\"%w_rowids\" WHERE id = ?\x00Could not find a row with rowid %lld\x00vectors\x00Could not fetch vector data for %lld, opening blob failed\x00Could not fetch vector data for %lld, reading from blob failed\x00Internal sqlite-vec error: unknown error, could not close vector blob, please file an issue\x00SELECT partition%02d FROM \"%w\".\"%w_chunks\" WHERE chunk_id = ?\x00SELECT value%02d FROM \"%w\".\"%w_auxiliary\" WHERE rowid = ?\x00data\x00SELECT data FROM \"%w\".\"%w_metadatatext%02d\" WHERE rowid = ?\x00SELECT max(rowid) FROM \"%w\".\"%w_chunks\" WHERE \x00 AND \x00 partition%02d = ? \x00SELECT max(rowid) FROM \"%w\".\"%w_chunks\"\x00Internal sqlite-vec error: could not initialize 'latest chunk' statement\x00Internal sqlite-vec error: Could not find latest chunk\x00Internal sqlite-vec error: unknown result code when closing out stmtLatestChunk. Please file an issue: https://github.com/asg017/sqlite-vec/issues/new\x00INSERT INTO \"%w\".\"%w_rowids\"(rowid)VALUES (?);\x00Internal sqlite-vec error: could not initialize 'insert rowids' statement\x00UNIQUE constraint failed on %s primary key\x00Error inserting rowid into rowids shadow table: %s\x00INSERT INTO \"%w\".\"%w_rowids\"(id)VALUES (?);\x00Internal sqlite-vec error: could not initialize 'insert rowids id' statement\x00Error inserting id into rowids shadow table: %s\x00 UPDATE \"%w\".\"%w_rowids\" SET chunk_id = ?, chunk_offset = ? WHERE rowid = ?\x00Internal sqlite-vec error: could not initialize 'update rowids position' statement\x00Internal sqlite-vec error: could not update rowids position for rowid=%lld, chunk_rowid=%lld, chunk_offset=%lld\x00INSERT INTO \"%w\".\"%w_chunks\"\x00(size, validity, rowids\x00, partition%02d\x00) VALUES (?, ?, ?\x00, ?\x00)\x00INSERT INTO \"%w\".\"%w_chunks\"(size, validity, rowids) VALUES (?, ?, ?);\x00INSERT INTO \"%w\".\"%w_vector_chunks%02d\"(_rowid_, rowid, vectors)VALUES (?, ?, ?)\x00INSERT INTO \"%w\".\"%w_metadatachunks%02d\"(_rowid_, rowid, data)VALUES (?, ?, ?)\x00vec0 constructor error: could not parse vector column '%s'\x00vec0 constructor error: Too many provided vector columns, maximum %d\x00vec0 constructor error: Dimension on vector column too large, provided %lld, maximum %lld\x00vec0 constructor error: More than %d partition key columns were provided\x00vec0 constructor error: More than one primary key definition was provided, vec0 only suports a single primary key column\x00vec0 constructor error: More than %d auxiliary columns were provided\x00vec0 constructor error: More than %d metadata columns were provided\x00vec0 constructor error: could not parse table option '%s'\x00chunk_size\x00vec0 constructor error: chunk_size must be a non-zero positive integer\x00vec0 constructor error: chunk_size must be divisible by 8\x00vec0 constructor error: chunk_size too large\x00vec0 constructor error: Unknown table option: %.*s\x00vec0 constructor error: Could not parse '%s'\x00vec0 constructor error: At least one vector column is required\x00CREATE TABLE x(\x00\"%.*w\" primary key, \x00rowid, \x00\"%.*w\", \x00 distance hidden, k hidden) \x00without rowid \x00vec0 constructor error: could not declare virtual table, '%s'\x00%s\x00%s_rowids\x00%s_chunks\x00%s_vector_chunks%02d\x00%s_metadatachunks%02d\x00CREATE TABLE \"%w\".\"%w_info\" (key text primary key, value any)\x00Could not create '_info' shadow table: %s\x00INSERT INTO \"%w\".\"%w_info\"(key, value) VALUES (?1, ?2), (?3, ?4), (?5, ?6), (?7, ?8) \x00Could not seed '_info' shadow table: %s\x00CREATE_VERSION\x00v0.1.7\x00CREATE_VERSION_MAJOR\x00CREATE_VERSION_MINOR\x00CREATE_VERSION_PATCH\x00CREATE TABLE \"%w\".\"%w_chunks\"(\x00chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,size INTEGER NOT NULL,\x00sequence_id integer,\x00partition%02d,\x00validity BLOB NOT NULL, rowids BLOB NOT NULL);\x00CREATE TABLE \"%w\".\"%w_chunks\"(chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,size INTEGER NOT NULL,validity BLOB NOT NULL,rowids BLOB NOT NULL);\x00Could not create '_chunks' shadow table: %s\x00CREATE TABLE \"%w\".\"%w_rowids\"(rowid INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,chunk_id INTEGER,chunk_offset INTEGER);\x00CREATE TABLE \"%w\".\"%w_rowids\"(rowid INTEGER PRIMARY KEY AUTOINCREMENT,id,chunk_id INTEGER,chunk_offset INTEGER);\x00Could not create '_rowids' shadow table: %s\x00CREATE TABLE \"%w\".\"%w_vector_chunks%02d\"(rowid PRIMARY KEY,vectors BLOB NOT NULL);\x00Could not create '_vector_chunks%02d' shadow table: %s\x00CREATE TABLE \"%w\".\"%w_metadatachunks%02d\"(rowid PRIMARY KEY, data BLOB NOT NULL);\x00Could not create '_metata_chunks%02d' shadow table: %s\x00CREATE TABLE \"%w\".\"%w_metadatatext%02d\"(rowid PRIMARY KEY, data TEXT);\x00Could not create '_metadatatext%02d' shadow table: %s\x00CREATE TABLE \"%w\".\"%w_auxiliary\"( rowid integer PRIMARY KEY \x00, value%02d\x00Could not create auxiliary shadow table: %s\x00DROP TABLE \"%w\".\"%w_chunks\"\x00could not drop chunks shadow table\x00DROP TABLE \"%w\".\"%w_info\"\x00could not drop info shadow table\x00DROP TABLE \"%w\".\"%w_rowids\"\x00DROP TABLE \"%w\".\"%w\"\x00DROP TABLE \"%w\".\"%w_auxiliary\"\x00DROP TABLE \"%w\".\"%w_metadatachunks%02d\"\x00DROP TABLE \"%w\".\"%w_metadatatext%02d\"\x00only 1 MATCH operator is allowed in a single vec0 query\x00only 1 'rowid in (..)' operator is allowed in a single vec0 query\x00A LIMIT or 'k = ?' constraint is required on vec0 knn queries.\x00Only LIMIT or 'k =?' can be provided, not both\x00Only a single 'ORDER BY distance' clause is allowed on vec0 KNN queries\x00Only a single 'ORDER BY distance' clause is allowed on vec0 KNN queries, not on other columns\x00Only ascending in ORDER BY distance clause is supported, DESC is not supported yet.\x00An illegal WHERE constraint was provided on a vec0 auxiliary column in a KNN query.\x00'xxx in (...)' is only available on INTEGER or TEXT metadata columns.\x00An illegal WHERE constraint was provided on a vec0 metadata column in a KNN query. Only one of EQUALS, GREATER_THAN, LESS_THAN_OR_EQUAL, LESS_THAN, GREATER_THAN_OR_EQUAL, NOT_EQUALS is allowed.\x00ONLY EQUALS (=) or NOT_EQUALS (!=) operators are allowed on boolean metadata columns.\x00Illegal WHERE constraint on distance column in a KNN query. Only one of GT, GE, LT, LE constraints are allowed.\x00select data from \"%w\".\"%w_metadatatext%02d\" where rowid = ?\x00select chunk_id, validity, rowids  from \"%w\".\"%w_chunks\"\x00 WHERE \x00 partition%02d > ? \x00 partition%02d <= ? \x00 partition%02d < ? \x00 partition%02d >= ? \x00 partition%02d != ? \x00rowids\x00chunks iter error\x00chunk validity size doesn't match - expected %lld, found %lld\x00rowids size doesn't match\x00chunk rowids size doesn't match - expected %lld, found %lld\x00could not open vectors blob for chunk %lld\x00vectors blob size doesn't match - expected %lld, found %lld\x00vectors blob read error for %lld\x00Could not open metadata blob\x00Could not filter metadata fields\x00Query vector on the \"%.*s\" column is invalid: %z\x00Query vector for the \"%.*s\" column is expected to be of type %s, but a %s vector was provided.\x00Dimension mismatch for query vector for the \"%.*s\" column. Expected %d dimensions but received %d.\x00k value in knn queries must be greater than or equal to 0.\x00k value in knn query too large, provided %lld and the limit is %lld\x00error processing rowid in (...) array\x00Error fetching next value in `x in (...)` integer expression\x00Error fetching next value in `x in (...)` text expression\x00Internal sqlite-vec error\x00Error preparing stmtChunk: %s\x00 SELECT rowid  FROM \"%w\".\"%w_rowids\" ORDER by chunk_id, chunk_offset \x00Error preparing rowid scan: %s\x00unknown idxStr '%s'\x00Internal sqlite-vec error: expected point query plan in vec0Rowid, found %d\x00Internal sqlite-vec error: fullscan_data is NULL.\x00Could not extract metadata value for column %.*s at rowid %lld\x00Internal sqlite-vec error: point_data is NULL.\x00Internal sqlite-vec error: knn_data is NULL.\x00The %s virtual table was declared with a TEXT primary key, but a non-TEXT value was provided in an INSERT.\x00Only integers are allows for primary key values on %s\x00validity\x00Internal sqlite-vec error: could not open validity blob on %s.%s.%lld\x00Internal sqlite-vec error: validity blob size mismatch on %s.%s.%lld, expected %lld but received %lld.\x00Internal sqlite-vec error: Could not allocate memory for validity bitmap\x00Internal sqlite-vec error: Could not read validity bitmap for %s.%s.%lld\x00Internal sqlite-vec error: Could not insert a new vector chunk\x00Internal sqlite-vec error: unknown error, blobChunksValidity could not be closed, please file an issue.\x00Internal sqlite-vec error: Could not open validity blob for newly created chunk %s.%s.%lld\x00Internal sqlite-vec error: validity blob size mismatch for newly created chunk %s.%s.%lld. Exepcted %lld, got %lld\x00Internal sqlite-vec error: could not read validity blob newly created chunk %s.%s.%lld\x00Internal sqlite-vec error: could not mark validity bit \x00Error opening vector blob at %s.%s.%lld\x00Internal sqlite-vec error: vector blob size mismatch on %s.%s.%lld. Expected %lld, actual %lld\x00Internal sqlite-vec error: could not write vector blob on %s.%s.%lld\x00Internal sqlite-vec error: could not close vector blob on %s.%s.%lld\x00Internal sqlite-vec error: could not open rowids blob on %s.%s.%lld\x00Internal sqlite-vec error: rowids blob size mismatch on %s.%s.%lld. Expected %lld, actual %lld\x00Internal sqlite-vec error: could not write rowids blob on %s.%s.%lld\x00Internal sqlite-vec error: could not close rowids blob on %s.%s.%lld\x00Expected 0 or 1 for BOOLEAN metadata column %.*s\x00Expected integer for INTEGER metadata column %.*s, received %s\x00Expected float for FLOAT metadata column %.*s, received %s\x00Expected text for TEXT metadata column %.*s, received %s\x00UPDATE \"%w\".\"%w_metadatatext%02d\" SET data = ?2 WHERE rowid = ?1\x00INSERT INTO \"%w\".\"%w_metadatatext%02d\" (rowid, data) VALUES (?1, ?2)\x00DELETE FROM \"%w\".\"%w_metadatatext%02d\" WHERE rowid = ?\x00Parition key type mismatch: The partition key column %.*s has type %s, but %s was provided.\x00Inserted vector for the \"%.*s\" column is invalid: %z\x00Inserted vector for the \"%.*s\" column is expected to be of type %s, but a %s vector was provided.\x00Dimension mismatch for inserted vector for the \"%.*s\" column. Expected %d dimensions but received %d.\x00A value was provided for the hidden \"distance\" column.\x00A value was provided for the hidden \"k\" column.\x00INSERT INTO \"%w\".\"%w_auxiliary\"(rowid \x00) VALUES (? \x00Auxiliary column type mismatch: The auxiliary column %.*s has type %s, but %s was provided.\x00Internal sqlite-vec error: unknown error, blobChunksValidity could not be closed, please file an issue\x00could not open validity blob for %s.%s.%lld\x00could not read validity blob for %s.%s.%lld at %d\x00vec0 deletion error: validity bit is not set for %s.%s.%lld at %d\x00could not write to validity blob for %s.%s.%lld at %d\x00vec0 deletion error: Error commiting validity blob transaction on %s.%s.%lld at %d\x00could not open rowids blob for %s.%s.%lld\x00could not write to rowids blob for %s.%s.%lld at %llu\x00vec0 deletion error: Error commiting rowids blob transaction on %s.%s.%lld at %llu\x00could not open vector blob for %s.%s.%lld column %d\x00could not write to vector blob for %s.%s.%lld at %llu column %d\x00vec0 deletion error: Error commiting vector blob transaction on %s.%s.%lld column %d\x00could not open validity blob for chunk %lld\x00DELETE FROM \"%w\".\"%w_chunks\" WHERE rowid = ?\x00DELETE FROM \"%w\".\"%w_vector_chunks%02d\" WHERE rowid = ?\x00DELETE FROM \"%w\".\"%w_metadatachunks%02d\" WHERE rowid = ?\x00DELETE FROM \"%w\".\"%w_rowids\" WHERE rowid = ?\x00DELETE FROM \"%w\".\"%w_auxiliary\" WHERE rowid = ?\x00UPDATE \"%w\".\"%w_auxiliary\" SET value%02d = ? WHERE rowid = ?\x00Updated vector for the \"%.*s\" column is invalid: %z\x00Updated vector for the \"%.*s\" column is expected to be of type %s, but a %s vector was provided.\x00Dimension mismatch for new updated vector for the \"%.*s\" column. Expected %d dimensions but received %d.\x00Could not open vectors blob for %s.%s.%lld\x00Could not write to vectors blob for %s.%s.%lld\x00Could not commit blob transaction for vectors blob for %s.%s.%lld\x00UPDATEs on vec0 primary key values are not allowed.\x00UPDATE on partition key columns are not supported yet. \x00Unrecognized xUpdate operation provided for vec0.\x00chunks\x00auxiliary\x00info\x00metadatachunks00\x00metadatachunks01\x00metadatachunks02\x00metadatachunks03\x00metadatachunks04\x00metadatachunks05\x00metadatachunks06\x00metadatachunks07\x00metadatachunks08\x00metadatachunks09\x00metadatachunks10\x00metadatachunks11\x00metadatachunks12\x00metadatachunks13\x00metadatachunks14\x00metadatachunks15\x00metadatatext00\x00metadatatext01\x00metadatatext02\x00metadatatext03\x00metadatatext04\x00metadatatext05\x00metadatatext06\x00metadatatext07\x00metadatatext08\x00metadatatext09\x00metadatatext10\x00metadatatext11\x00metadatatext12\x00metadatatext13\x00metadatatext14\x00metadatatext15\x00vec0-static_blob_def\x00CREATE TABLE x(name, data, dimensions hidden, count hidden)\x00CREATE TABLE x(vector, distance hidden, k hidden)\x00ORDER BY distance required\x00more than 1 ORDER BY clause provided\x00ORDER BY must be on the distance column\x00vec_version\x00vec_debug\x00Version: v0.1.7\nDate: 2026-03-17T08:25:43Z+0100\nCommit: \nBuild flags:  \x00vec_distance_l2\x00vec_distance_l1\x00vec_distance_hamming\x00vec_distance_cosine\x00vec_length\x00vec_type\x00vec_to_json\x00vec_add\x00vec_sub\x00vec_slice\x00vec_normalize\x00vec_f32\x00vec_bit\x00vec_int8\x00vec_quantize_int8\x00vec_quantize_binary\x00vec0\x00vec_each\x00Error creating function %s: %s\x00Error creating module %s: %s\x00vec_npy_file\x00vec_npy_each\x00vec_static_blob_from_raw\x00vec_static_blobs\x00vec_static_blob_entries\x00"
+var __ccgo_ts1 = "float32\x00int8\x00bit\x00\x00INTEGER\x00BLOB\x00TEXT\x00FLOAT\x00NULL\x00zero-length vectors are not supported.\x00invalid float32 vector BLOB length. Must be divisible by %d, found %d\x00out of memory\x00JSON array parsing error: Input does not start with '['\x00JSON parsing error\x00Input must have type BLOB (compact format) or TEXT (JSON), found %s\x00Unknown type for bitvector.\x00JSON parsing error: value out of range for int8\x00Unknown type for int8 vector.\x00Unknown subtype: %d\x00Error reading 1st vector: %s\x00Error reading 2nd vector: %s\x00Vector type mistmatch. First vector has type %s, while the second has type %s.\x00Vector dimension mistmatch. First vector has %ld dimensions, while the second has %ld dimensions.\x00vec0-npy-file\x00Cannot calculate cosine distance between two bitvectors.\x00Cannot calculate L2 distance between two bitvectors.\x00Cannot calculate L1 distance between two bitvectors.\x00Cannot calculate hamming distance between two float32 vectors.\x00Cannot calculate hamming distance between two int8 vectors.\x00Zero length vectors are not supported.\x00Binary quantization requires vectors with a length divisible by 8\x00Can only binary quantize float or int8 vectors\x00unit\x002nd argument to vec_quantize_int8() must be 'unit'.\x00Cannot add two bitvectors together.\x00Cannot subtract two bitvectors together.\x00slice 'start' index must be a postive number.\x00slice 'end' index must be a postive number.\x00slice 'start' index is greater than the number of dimensions\x00slice 'end' index is greater than the number of dimensions\x00slice 'start' index is greater than 'end' index\x00slice 'start' index is equal to the 'end' index, vectors must have non-zero length\x00start index must be divisible by 8.\x00end index must be divisible by 8.\x00[\x00,\x00null\x00%f\x00%d\x00]\x00only float32 vectors are supported when normalizing\x00text\x00int\x00integer\x00partition\x00key\x00float\x00double\x00blob\x00boolean\x00bool\x00int64\x00integer64\x00float64\x00f64\x00primary\x00f32\x00i8\x00distance_metric\x00l2\x00l1\x00cosine\x00%.*s\x00CREATE TABLE x(value, vector hidden)\x00False\x00Error parsing numpy array: numpy header did not start with '{'\x00Error parsing numpy array: expected key in numpy header\x00Error parsing numpy array: expected a string as key in numpy header\x00Error parsing numpy array: expected a ':' after key in numpy header\x00'descr'\x00Error parsing numpy array: expected a string value after 'descr' key\x00'<f4'\x00Error parsing numpy array: Only '<f4' values are supported in sqlite-vec numpy functions\x00'fortran_order'\x00Error parsing numpy array: Only fortran_order = False is supported in sqlite-vec numpy functions\x00'shape'\x00Error parsing numpy array: Expected left parenthesis '(' after shape key\x00Error parsing numpy array: Expected an initial number in shape value\x00Error parsing numpy array: Expected comma after first shape value\x00Error parsing numpy array: unexpected header EOF while parsing shape\x00Error parsing numpy array: expected right parenthesis after shape value\x00Error parsing numpy array: unknown type in shape value\x00Error parsing numpy array: unknown key in numpy header\x00Error parsing numpy array: unknown extra token after value\x00numpy array file too short\x00numpy array file does not contain the 'magic' header\x00numpy array file header length is invalid\x00numpy array file error: Expected a data size of %d, found %d\x00numpy array too short\x00numpy array does not contain the 'magic' header\x00numpy array header length is invalid\x00numpy array error: Expected a data size of %d, found %d\x00CREATE TABLE x(vector, input hidden)\x00input argument is required\x00r\x00Could not open numpy file\x00vec_npy_each only supports float32 vectors\x00SELECT id, chunk_id, chunk_offset FROM \"%w\".\"%w_rowids\" WHERE rowid = ?\x00Internal sqlite-vec error: could not initialize 'rowids get chunk position' statement\x00SELECT rowid FROM \"%w\".\"%w_rowids\" WHERE id = ?\x00Could not find a row with rowid %lld\x00vectors\x00Could not fetch vector data for %lld, opening blob failed\x00Could not fetch vector data for %lld, reading from blob failed\x00Internal sqlite-vec error: unknown error, could not close vector blob, please file an issue\x00SELECT partition%02d FROM \"%w\".\"%w_chunks\" WHERE chunk_id = ?\x00SELECT value%02d FROM \"%w\".\"%w_auxiliary\" WHERE rowid = ?\x00data\x00SELECT data FROM \"%w\".\"%w_metadatatext%02d\" WHERE rowid = ?\x00SELECT max(rowid) FROM \"%w\".\"%w_chunks\" WHERE \x00 AND \x00 partition%02d = ? \x00SELECT max(rowid) FROM \"%w\".\"%w_chunks\"\x00Internal sqlite-vec error: could not initialize 'latest chunk' statement\x00Internal sqlite-vec error: Could not find latest chunk\x00Internal sqlite-vec error: unknown result code when closing out stmtLatestChunk. Please file an issue: https://github.com/asg017/sqlite-vec/issues/new\x00INSERT INTO \"%w\".\"%w_rowids\"(rowid)VALUES (?);\x00Internal sqlite-vec error: could not initialize 'insert rowids' statement\x00UNIQUE constraint failed on %s primary key\x00Error inserting rowid into rowids shadow table: %s\x00INSERT INTO \"%w\".\"%w_rowids\"(id)VALUES (?);\x00Internal sqlite-vec error: could not initialize 'insert rowids id' statement\x00Error inserting id into rowids shadow table: %s\x00 UPDATE \"%w\".\"%w_rowids\" SET chunk_id = ?, chunk_offset = ? WHERE rowid = ?\x00Internal sqlite-vec error: could not initialize 'update rowids position' statement\x00Internal sqlite-vec error: could not update rowids position for rowid=%lld, chunk_rowid=%lld, chunk_offset=%lld\x00INSERT INTO \"%w\".\"%w_chunks\"\x00(size, validity, rowids\x00, partition%02d\x00) VALUES (?, ?, ?\x00, ?\x00)\x00INSERT INTO \"%w\".\"%w_chunks\"(size, validity, rowids) VALUES (?, ?, ?);\x00INSERT INTO \"%w\".\"%w_vector_chunks%02d\"(_rowid_, rowid, vectors)VALUES (?, ?, ?)\x00INSERT INTO \"%w\".\"%w_metadatachunks%02d\"(_rowid_, rowid, data)VALUES (?, ?, ?)\x00vec0 constructor error: could not parse vector column '%s'\x00vec0 constructor error: Too many provided vector columns, maximum %d\x00vec0 constructor error: Dimension on vector column too large, provided %lld, maximum %lld\x00vec0 constructor error: More than %d partition key columns were provided\x00vec0 constructor error: More than one primary key definition was provided, vec0 only suports a single primary key column\x00vec0 constructor error: More than %d auxiliary columns were provided\x00vec0 constructor error: More than %d metadata columns were provided\x00vec0 constructor error: could not parse table option '%s'\x00chunk_size\x00vec0 constructor error: chunk_size must be a non-zero positive integer\x00vec0 constructor error: chunk_size must be divisible by 8\x00vec0 constructor error: chunk_size too large\x00vec0 constructor error: Unknown table option: %.*s\x00vec0 constructor error: Could not parse '%s'\x00vec0 constructor error: At least one vector column is required\x00CREATE TABLE x(\x00\"%.*w\" primary key, \x00rowid, \x00\"%.*w\", \x00 distance hidden, k hidden) \x00without rowid \x00vec0 constructor error: could not declare virtual table, '%s'\x00%s\x00%s_rowids\x00%s_chunks\x00%s_vector_chunks%02d\x00%s_metadatachunks%02d\x00CREATE TABLE \"%w\".\"%w_info\" (key text primary key, value any)\x00Could not create '_info' shadow table: %s\x00INSERT INTO \"%w\".\"%w_info\"(key, value) VALUES (?1, ?2), (?3, ?4), (?5, ?6), (?7, ?8) \x00Could not seed '_info' shadow table: %s\x00CREATE_VERSION\x00v0.1.9\x00CREATE_VERSION_MAJOR\x00CREATE_VERSION_MINOR\x00CREATE_VERSION_PATCH\x00CREATE TABLE \"%w\".\"%w_chunks\"(\x00chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,size INTEGER NOT NULL,\x00sequence_id integer,\x00partition%02d,\x00validity BLOB NOT NULL, rowids BLOB NOT NULL);\x00CREATE TABLE \"%w\".\"%w_chunks\"(chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,size INTEGER NOT NULL,validity BLOB NOT NULL,rowids BLOB NOT NULL);\x00Could not create '_chunks' shadow table: %s\x00CREATE TABLE \"%w\".\"%w_rowids\"(rowid INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,chunk_id INTEGER,chunk_offset INTEGER);\x00CREATE TABLE \"%w\".\"%w_rowids\"(rowid INTEGER PRIMARY KEY AUTOINCREMENT,id,chunk_id INTEGER,chunk_offset INTEGER);\x00Could not create '_rowids' shadow table: %s\x00CREATE TABLE \"%w\".\"%w_vector_chunks%02d\"(rowid PRIMARY KEY,vectors BLOB NOT NULL);\x00Could not create '_vector_chunks%02d' shadow table: %s\x00CREATE TABLE \"%w\".\"%w_metadatachunks%02d\"(rowid PRIMARY KEY, data BLOB NOT NULL);\x00Could not create '_metata_chunks%02d' shadow table: %s\x00CREATE TABLE \"%w\".\"%w_metadatatext%02d\"(rowid PRIMARY KEY, data TEXT);\x00Could not create '_metadatatext%02d' shadow table: %s\x00CREATE TABLE \"%w\".\"%w_auxiliary\"( rowid integer PRIMARY KEY \x00, value%02d\x00Could not create auxiliary shadow table: %s\x00DROP TABLE \"%w\".\"%w_chunks\"\x00could not drop chunks shadow table\x00DROP TABLE \"%w\".\"%w_info\"\x00could not drop info shadow table\x00DROP TABLE \"%w\".\"%w_rowids\"\x00DROP TABLE \"%w\".\"%w\"\x00DROP TABLE \"%w\".\"%w_auxiliary\"\x00DROP TABLE \"%w\".\"%w_metadatachunks%02d\"\x00DROP TABLE \"%w\".\"%w_metadatatext%02d\"\x00only 1 MATCH operator is allowed in a single vec0 query\x00only 1 'rowid in (..)' operator is allowed in a single vec0 query\x00A LIMIT or 'k = ?' constraint is required on vec0 knn queries.\x00Only LIMIT or 'k =?' can be provided, not both\x00Only a single 'ORDER BY distance' clause is allowed on vec0 KNN queries\x00Only a single 'ORDER BY distance' clause is allowed on vec0 KNN queries, not on other columns\x00Only ascending in ORDER BY distance clause is supported, DESC is not supported yet.\x00An illegal WHERE constraint was provided on a vec0 auxiliary column in a KNN query.\x00'xxx in (...)' is only available on INTEGER or TEXT metadata columns.\x00An illegal WHERE constraint was provided on a vec0 metadata column in a KNN query. Only one of EQUALS, GREATER_THAN, LESS_THAN_OR_EQUAL, LESS_THAN, GREATER_THAN_OR_EQUAL, NOT_EQUALS is allowed.\x00ONLY EQUALS (=) or NOT_EQUALS (!=) operators are allowed on boolean metadata columns.\x00Illegal WHERE constraint on distance column in a KNN query. Only one of GT, GE, LT, LE constraints are allowed.\x00select data from \"%w\".\"%w_metadatatext%02d\" where rowid = ?\x00select chunk_id, validity, rowids  from \"%w\".\"%w_chunks\"\x00 WHERE \x00 partition%02d > ? \x00 partition%02d <= ? \x00 partition%02d < ? \x00 partition%02d >= ? \x00 partition%02d != ? \x00rowids\x00chunks iter error\x00chunk validity size doesn't match - expected %lld, found %lld\x00rowids size doesn't match\x00chunk rowids size doesn't match - expected %lld, found %lld\x00could not open vectors blob for chunk %lld\x00vectors blob size doesn't match - expected %lld, found %lld\x00vectors blob read error for %lld\x00Could not open metadata blob\x00Could not filter metadata fields\x00Query vector on the \"%.*s\" column is invalid: %z\x00Query vector for the \"%.*s\" column is expected to be of type %s, but a %s vector was provided.\x00Dimension mismatch for query vector for the \"%.*s\" column. Expected %d dimensions but received %d.\x00k value in knn queries must be greater than or equal to 0.\x00k value in knn query too large, provided %lld and the limit is %lld\x00error processing rowid in (...) array\x00Error fetching next value in `x in (...)` integer expression\x00Error fetching next value in `x in (...)` text expression\x00Internal sqlite-vec error\x00Error preparing stmtChunk: %s\x00 SELECT rowid  FROM \"%w\".\"%w_rowids\" ORDER by chunk_id, chunk_offset \x00Error preparing rowid scan: %s\x00unknown idxStr '%s'\x00Internal sqlite-vec error: expected point query plan in vec0Rowid, found %d\x00Internal sqlite-vec error: fullscan_data is NULL.\x00Could not extract metadata value for column %.*s at rowid %lld\x00Internal sqlite-vec error: point_data is NULL.\x00Internal sqlite-vec error: knn_data is NULL.\x00The %s virtual table was declared with a TEXT primary key, but a non-TEXT value was provided in an INSERT.\x00Only integers are allows for primary key values on %s\x00validity\x00Internal sqlite-vec error: could not open validity blob on %s.%s.%lld\x00Internal sqlite-vec error: validity blob size mismatch on %s.%s.%lld, expected %lld but received %lld.\x00Internal sqlite-vec error: Could not allocate memory for validity bitmap\x00Internal sqlite-vec error: Could not read validity bitmap for %s.%s.%lld\x00Internal sqlite-vec error: Could not insert a new vector chunk\x00Internal sqlite-vec error: unknown error, blobChunksValidity could not be closed, please file an issue.\x00Internal sqlite-vec error: Could not open validity blob for newly created chunk %s.%s.%lld\x00Internal sqlite-vec error: validity blob size mismatch for newly created chunk %s.%s.%lld. Exepcted %lld, got %lld\x00Internal sqlite-vec error: could not read validity blob newly created chunk %s.%s.%lld\x00Internal sqlite-vec error: could not mark validity bit \x00Error opening vector blob at %s.%s.%lld\x00Internal sqlite-vec error: vector blob size mismatch on %s.%s.%lld. Expected %lld, actual %lld\x00Internal sqlite-vec error: could not write vector blob on %s.%s.%lld\x00Internal sqlite-vec error: could not close vector blob on %s.%s.%lld\x00Internal sqlite-vec error: could not open rowids blob on %s.%s.%lld\x00Internal sqlite-vec error: rowids blob size mismatch on %s.%s.%lld. Expected %lld, actual %lld\x00Internal sqlite-vec error: could not write rowids blob on %s.%s.%lld\x00Internal sqlite-vec error: could not close rowids blob on %s.%s.%lld\x00Expected 0 or 1 for BOOLEAN metadata column %.*s\x00Expected integer for INTEGER metadata column %.*s, received %s\x00Expected float for FLOAT metadata column %.*s, received %s\x00Expected text for TEXT metadata column %.*s, received %s\x00UPDATE \"%w\".\"%w_metadatatext%02d\" SET data = ?2 WHERE rowid = ?1\x00INSERT INTO \"%w\".\"%w_metadatatext%02d\" (rowid, data) VALUES (?1, ?2)\x00DELETE FROM \"%w\".\"%w_metadatatext%02d\" WHERE rowid = ?\x00Parition key type mismatch: The partition key column %.*s has type %s, but %s was provided.\x00Inserted vector for the \"%.*s\" column is invalid: %z\x00Inserted vector for the \"%.*s\" column is expected to be of type %s, but a %s vector was provided.\x00Dimension mismatch for inserted vector for the \"%.*s\" column. Expected %d dimensions but received %d.\x00A value was provided for the hidden \"distance\" column.\x00A value was provided for the hidden \"k\" column.\x00INSERT INTO \"%w\".\"%w_auxiliary\"(rowid \x00) VALUES (? \x00Auxiliary column type mismatch: The auxiliary column %.*s has type %s, but %s was provided.\x00Internal sqlite-vec error: unknown error, blobChunksValidity could not be closed, please file an issue\x00could not open validity blob for %s.%s.%lld\x00could not read validity blob for %s.%s.%lld at %d\x00vec0 deletion error: validity bit is not set for %s.%s.%lld at %d\x00could not write to validity blob for %s.%s.%lld at %d\x00vec0 deletion error: Error commiting validity blob transaction on %s.%s.%lld at %d\x00could not open rowids blob for %s.%s.%lld\x00could not write to rowids blob for %s.%s.%lld at %llu\x00vec0 deletion error: Error commiting rowids blob transaction on %s.%s.%lld at %llu\x00could not open vector blob for %s.%s.%lld column %d\x00could not write to vector blob for %s.%s.%lld at %llu column %d\x00vec0 deletion error: Error commiting vector blob transaction on %s.%s.%lld column %d\x00could not open validity blob for chunk %lld\x00DELETE FROM \"%w\".\"%w_chunks\" WHERE rowid = ?\x00DELETE FROM \"%w\".\"%w_vector_chunks%02d\" WHERE rowid = ?\x00DELETE FROM \"%w\".\"%w_metadatachunks%02d\" WHERE rowid = ?\x00DELETE FROM \"%w\".\"%w_rowids\" WHERE rowid = ?\x00DELETE FROM \"%w\".\"%w_auxiliary\" WHERE rowid = ?\x00UPDATE \"%w\".\"%w_auxiliary\" SET value%02d = ? WHERE rowid = ?\x00Updated vector for the \"%.*s\" column is invalid: %z\x00Updated vector for the \"%.*s\" column is expected to be of type %s, but a %s vector was provided.\x00Dimension mismatch for new updated vector for the \"%.*s\" column. Expected %d dimensions but received %d.\x00Could not open vectors blob for %s.%s.%lld\x00Could not write to vectors blob for %s.%s.%lld\x00Could not commit blob transaction for vectors blob for %s.%s.%lld\x00UPDATEs on vec0 primary key values are not allowed.\x00UPDATE on partition key columns are not supported yet. \x00Unrecognized xUpdate operation provided for vec0.\x00chunks\x00auxiliary\x00info\x00metadatachunks00\x00metadatachunks01\x00metadatachunks02\x00metadatachunks03\x00metadatachunks04\x00metadatachunks05\x00metadatachunks06\x00metadatachunks07\x00metadatachunks08\x00metadatachunks09\x00metadatachunks10\x00metadatachunks11\x00metadatachunks12\x00metadatachunks13\x00metadatachunks14\x00metadatachunks15\x00metadatatext00\x00metadatatext01\x00metadatatext02\x00metadatatext03\x00metadatatext04\x00metadatatext05\x00metadatatext06\x00metadatatext07\x00metadatatext08\x00metadatatext09\x00metadatatext10\x00metadatatext11\x00metadatatext12\x00metadatatext13\x00metadatatext14\x00metadatatext15\x00vec0-static_blob_def\x00CREATE TABLE x(name, data, dimensions hidden, count hidden)\x00CREATE TABLE x(vector, distance hidden, k hidden)\x00ORDER BY distance required\x00more than 1 ORDER BY clause provided\x00ORDER BY must be on the distance column\x00vec_version\x00vec_debug\x00Version: v0.1.9\nDate: 2026-03-31T09:59:06Z+0200\nCommit: \nBuild flags:  \x00vec_distance_l2\x00vec_distance_l1\x00vec_distance_hamming\x00vec_distance_cosine\x00vec_length\x00vec_type\x00vec_to_json\x00vec_add\x00vec_sub\x00vec_slice\x00vec_normalize\x00vec_f32\x00vec_bit\x00vec_int8\x00vec_quantize_int8\x00vec_quantize_binary\x00vec0\x00vec_each\x00Error creating function %s: %s\x00Error creating module %s: %s\x00vec_npy_file\x00vec_npy_each\x00vec_static_blob_from_raw\x00vec_static_blobs\x00vec_static_blob_entries\x00"
