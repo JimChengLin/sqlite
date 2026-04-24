@@ -3620,6 +3620,131 @@ func (c *concurrentBenchmark) makeWriters(n int, mode string) {
 	wait.Wait()
 }
 
+func TestColumnInfo(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	for _, stmt := range []string{
+		`CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, secret TEXT)`,
+		`CREATE VIEW v AS SELECT id, name FROM users`,
+		`INSERT INTO users (id, name, secret) VALUES (1, 'a', 's1')`,
+	} {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("setup %q: %v", stmt, err)
+		}
+	}
+
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// columnInformer mirrors the interface a user of the driver would
+	// declare locally to call ColumnInfo via (*sql.Conn).Raw without
+	// importing the concrete driver type.
+	type columnInformer interface {
+		ColumnInfo(query string) ([]ColumnInfo, error)
+	}
+	columnInfo := func(query string) ([]ColumnInfo, error) {
+		var info []ColumnInfo
+		err := conn.Raw(func(driverConn any) error {
+			ci, ok := driverConn.(columnInformer)
+			if !ok {
+				return fmt.Errorf("driver does not support ColumnInfo: %T", driverConn)
+			}
+			var err error
+			info, err = ci.ColumnInfo(query)
+			return err
+		})
+		return info, err
+	}
+
+	cases := []struct {
+		name  string
+		query string
+		want  []ColumnInfo
+	}{
+		{
+			name:  "direct column refs",
+			query: `SELECT id, name, secret FROM users`,
+			want: []ColumnInfo{
+				{Name: "id", DeclType: "INTEGER", DatabaseName: "main", TableName: "users", OriginName: "id"},
+				{Name: "name", DeclType: "TEXT", DatabaseName: "main", TableName: "users", OriginName: "name"},
+				{Name: "secret", DeclType: "TEXT", DatabaseName: "main", TableName: "users", OriginName: "secret"},
+			},
+		},
+		{
+			name:  "aliased column keeps origin",
+			query: `SELECT secret AS s FROM users`,
+			want: []ColumnInfo{
+				{Name: "s", DeclType: "TEXT", DatabaseName: "main", TableName: "users", OriginName: "secret"},
+			},
+		},
+		{
+			name:  "expression has no origin",
+			query: `SELECT LOWER(name) FROM users`,
+			want:  []ColumnInfo{{Name: "LOWER(name)"}},
+		},
+		{
+			name:  "constant has no origin",
+			query: `SELECT 1`,
+			want:  []ColumnInfo{{Name: "1"}},
+		},
+		{
+			name:  "mixed",
+			query: `SELECT id, LOWER(name), 42 FROM users`,
+			want: []ColumnInfo{
+				{Name: "id", DeclType: "INTEGER", DatabaseName: "main", TableName: "users", OriginName: "id"},
+				{Name: "LOWER(name)"},
+				{Name: "42"},
+			},
+		},
+		{
+			name:  "view resolves to underlying table",
+			query: `SELECT id, name FROM v`,
+			want: []ColumnInfo{
+				{Name: "id", DeclType: "INTEGER", DatabaseName: "main", TableName: "users", OriginName: "id"},
+				{Name: "name", DeclType: "TEXT", DatabaseName: "main", TableName: "users", OriginName: "name"},
+			},
+		},
+		{
+			name:  "select star",
+			query: `SELECT * FROM users`,
+			want: []ColumnInfo{
+				{Name: "id", DeclType: "INTEGER", DatabaseName: "main", TableName: "users", OriginName: "id"},
+				{Name: "name", DeclType: "TEXT", DatabaseName: "main", TableName: "users", OriginName: "name"},
+				{Name: "secret", DeclType: "TEXT", DatabaseName: "main", TableName: "users", OriginName: "secret"},
+			},
+		},
+		{
+			name:  "no output columns (comment only)",
+			query: `-- just a comment`,
+			want:  nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := columnInfo(tc.query)
+			if err != nil {
+				t.Fatalf("ColumnInfo(%q): %v", tc.query, err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ColumnInfo(%q) = %+v, want %+v", tc.query, got, tc.want)
+			}
+		})
+	}
+
+	// Invalid SQL surfaces the prepare error.
+	if _, err := columnInfo(`SELECT * FROM no_such_table`); err == nil {
+		t.Fatal("expected error on invalid query, got nil")
+	}
+}
+
 func TestLimit(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
