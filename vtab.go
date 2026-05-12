@@ -542,8 +542,10 @@ func vtabFilterTrampoline(tls *libc.TLS, pCursor uintptr, idxNum int32, idxStr u
 	if idxStr != 0 {
 		idxStrGo = libc.GoString(idxStr)
 	}
-	vals := functionArgs(tls, argc, argv)
-	if err := gc.impl.Filter(int(idxNum), idxStrGo, vals); err != nil {
+	sp := functionArgs(tls, argc, argv)
+	defer releaseUDFArgs(sp)
+	err := gc.impl.Filter(int(idxNum), idxStrGo, *sp)
+	if err != nil {
 		// Set zErrMsg on the associated vtab for better diagnostics.
 		if pCursor != 0 {
 			cur := (*sqlite3.Sqlite3_vtab_cursor)(unsafe.Pointer(pCursor))
@@ -760,7 +762,9 @@ func vtabUpdateTrampoline(tls *libc.TLS, pVtab uintptr, argc int32, argv uintptr
 	nCols := argc - 2
 	// Extract column values starting from argv[2]
 	colsPtr := argv + uintptr(2)*sqliteValPtrSize
-	cols := functionArgs(tls, nCols, colsPtr)
+	sp := functionArgs(tls, nCols, colsPtr)
+	defer releaseUDFArgs(sp)
+	cols := *sp
 
 	// Determine old/new rowid
 	oldPtr := *(*uintptr)(unsafe.Pointer(argv + uintptr(0)*sqliteValPtrSize))

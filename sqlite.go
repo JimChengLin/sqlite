@@ -556,8 +556,47 @@ func errorResultFunction(tls *libc.TLS, ctx uintptr) func(error) {
 	}
 }
 
-func functionArgs(tls *libc.TLS, argc int32, argv uintptr) []driver.Value {
-	args := make([]driver.Value, argc)
+// udfArgsPool reuses []driver.Value slices passed to user-defined functions.
+// The driver's contract (documented on FunctionImpl.Scalar and
+// AggregateFunction.Step/WindowInverse) states that the args values are not
+// valid past the return of the user function, which makes the slice itself
+// safe to reuse. See https://gitlab.com/cznic/sqlite/-/issues/226.
+var udfArgsPool = sync.Pool{
+	New: func() any {
+		s := make([]driver.Value, 0, 8)
+		return &s
+	},
+}
+
+// acquireUDFArgs returns a pooled *[]driver.Value with len == n. The caller
+// must invoke releaseUDFArgs after the user function has returned.
+func acquireUDFArgs(n int) *[]driver.Value {
+	sp := udfArgsPool.Get().(*[]driver.Value)
+	if cap(*sp) < n {
+		*sp = make([]driver.Value, n)
+	} else {
+		*sp = (*sp)[:n]
+	}
+	return sp
+}
+
+// releaseUDFArgs returns the slice to the pool after clearing each entry so
+// any heap references held in the previous invocation can be reclaimed.
+func releaseUDFArgs(sp *[]driver.Value) {
+	s := *sp
+	for i := range s {
+		s[i] = nil
+	}
+	*sp = s[:0]
+	udfArgsPool.Put(sp)
+}
+
+// functionArgs prepares a []driver.Value for one user-function invocation.
+// The returned slice is owned by the driver and must be released via
+// releaseUDFArgs once the user function returns.
+func functionArgs(tls *libc.TLS, argc int32, argv uintptr) *[]driver.Value {
+	sp := acquireUDFArgs(int(argc))
+	args := *sp
 	for i := int32(0); i < argc; i++ {
 		valPtr := *(*uintptr)(unsafe.Pointer(argv + uintptr(i)*sqliteValPtrSize))
 
@@ -583,7 +622,7 @@ func functionArgs(tls *libc.TLS, argc int32, argv uintptr) []driver.Value {
 		}
 	}
 
-	return args
+	return sp
 }
 
 func functionReturnValue(tls *libc.TLS, ctx uintptr, res driver.Value) error {
@@ -758,7 +797,9 @@ func funcTrampoline(tls *libc.TLS, ctx uintptr, argc int32, argv uintptr) {
 	xFuncs.mu.RUnlock()
 
 	setErrorResult := errorResultFunction(tls, ctx)
-	res, err := xFunc(&FunctionContext{}, functionArgs(tls, argc, argv))
+	sp := functionArgs(tls, argc, argv)
+	defer releaseUDFArgs(sp)
+	res, err := xFunc(&FunctionContext{}, *sp)
 
 	if err != nil {
 		setErrorResult(err)
@@ -793,7 +834,9 @@ func stepTrampoline(tls *libc.TLS, ctx uintptr, argc int32, argv uintptr) {
 	}
 
 	setErrorResult := errorResultFunction(tls, ctx)
-	err := impl.Step(&FunctionContext{}, functionArgs(tls, argc, argv))
+	sp := functionArgs(tls, argc, argv)
+	defer releaseUDFArgs(sp)
+	err := impl.Step(&FunctionContext{}, *sp)
 	if err != nil {
 		setErrorResult(err)
 	}
@@ -806,7 +849,9 @@ func inverseTrampoline(tls *libc.TLS, ctx uintptr, argc int32, argv uintptr) {
 	}
 
 	setErrorResult := errorResultFunction(tls, ctx)
-	err := impl.WindowInverse(&FunctionContext{}, functionArgs(tls, argc, argv))
+	sp := functionArgs(tls, argc, argv)
+	defer releaseUDFArgs(sp)
+	err := impl.WindowInverse(&FunctionContext{}, *sp)
 	if err != nil {
 		setErrorResult(err)
 	}

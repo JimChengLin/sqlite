@@ -216,6 +216,68 @@ func init() {
 			return nil, nil
 		},
 	})
+
+	// Used by BenchmarkUDFArgsAllocation. Returns nil without inspecting args so
+	// that the cost measured is dominated by argument marshalling in
+	// functionArgs, not by user code.
+	MustRegisterDeterministicScalarFunction(
+		"issue226_noop",
+		3,
+		func(ctx *FunctionContext, args []driver.Value) (driver.Value, error) {
+			return nil, nil
+		},
+	)
+}
+
+// BenchmarkUDFArgsAllocation measures allocations in functionArgs when a
+// user-defined scalar function is invoked many times within a single query.
+// Regression target for https://gitlab.com/cznic/sqlite/-/issues/226 — the
+// hot path is the per-call allocation of the []driver.Value args slice in
+// functionArgs and the auxiliary copies of TEXT/BLOB values.
+func BenchmarkUDFArgsAllocation(b *testing.B) {
+	db, err := sql.Open(driverName, "file::memory:")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`CREATE TABLE t (a INTEGER, b TEXT, c BLOB)`); err != nil {
+		b.Fatal(err)
+	}
+
+	const rows = 1000
+	tx, err := db.Begin()
+	if err != nil {
+		b.Fatal(err)
+	}
+	stmt, err := tx.Prepare(`INSERT INTO t (a, b, c) VALUES (?, ?, ?)`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for i := 0; i < rows; i++ {
+		if _, err := stmt.Exec(int64(i), "hello", []byte{1, 2, 3}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	stmt.Close()
+	if err := tx.Commit(); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r, err := db.Query(`SELECT issue226_noop(a, b, c) FROM t`)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for r.Next() {
+		}
+		if err := r.Err(); err != nil {
+			b.Fatal(err)
+		}
+		r.Close()
+	}
 }
 
 func TestRegisteredFunctions(t *testing.T) {
