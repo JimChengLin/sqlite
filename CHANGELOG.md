@@ -1,5 +1,10 @@
 # Changelog
 
+ - 2026-05-21 v1.51.2:
+     - Add `FileControl.FileControlDataVersion`, a wrapper around `SQLITE_FCNTL_DATA_VERSION` for observing pager-cache data-version changes, including those made on the same connection. Useful as a primitive for application-level cache invalidation.
+     - Exposed via the idiomatic `database/sql` escape hatch `(*sql.Conn).Raw()`, consistent with the existing `FileControlPersistWAL`.                                                                    
+     - See [GitLab merge request #115](https://gitlab.com/cznic/sqlite/-/merge_requests/115), thanks Ian Chechin!
+
  - 2026-05-10 v1.50.1:
      - Upgrade to [SQLite 3.53.1](https://sqlite.org/releaselog/3_53_1.html).
 
