@@ -122,7 +122,9 @@ type Transactional interface {
 // Cursor represents a cursor over a virtual table (sqlite3_vtab_cursor).
 type Cursor interface {
 	// Filter corresponds to xFilter. idxNum and idxStr are the chosen index
-	// number and string; vals are the constraint arguments.
+	// number and string; vals are the constraint arguments. The vals slice
+	// and its entries are not valid past the return of this method;
+	// implementations must copy any value they wish to retain.
 	Filter(idxNum int, idxStr string, vals []Value) error
 
 	// Next advances the cursor to the next row (xNext).
@@ -150,6 +152,10 @@ type Cursor interface {
 //     (if provided by SQL) and should be set to the final rowid of the new row.
 //   - Update: Update(oldRowid, cols, newRowid) is called. *newRowid may be set
 //     to the final rowid of the updated row when changed.
+//
+// For Insert and Update, the cols slice and its entries are not valid past
+// the return of the method; implementations must copy any value they wish
+// to retain.
 type Updater interface {
 	Insert(cols []Value, rowid *int64) error
 	Update(oldRowid int64, cols []Value, newRowid *int64) error
