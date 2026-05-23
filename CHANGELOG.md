@@ -1,6 +1,9 @@
 # Changelog
 
  - 2026-05-21 v1.51.2:
+     - Pool the `[]driver.Value` slice passed to scalar/aggregate UDF callbacks and to vtab `Filter`/`Insert`/`Update` callbacks, eliminating the dominant per-row allocation on UDF-heavy queries. Benchmarks on a 1000-row, 3-arg noop scalar UDF show ~40% fewer bytes/op and ~15% fewer allocs/op.
+     - Document the matching "arguments are not valid past return" contract on `vtab.Cursor.Filter` and `vtab.Updater.Insert`/`Update`, consistent with the existing rule for `FunctionImpl.Scalar` / `AggregateFunction.Step` / `WindowInverse`.
+     - Resolves [GitLab issue #226](https://gitlab.com/cznic/sqlite/-/issues/226). See [GitLab merge request #114](https://gitlab.com/cznic/sqlite/-/merge_requests/114), thanks Ian Chechin!
      - Add `FileControl.FileControlDataVersion`, a wrapper around `SQLITE_FCNTL_DATA_VERSION` for observing pager-cache data-version changes, including those made on the same connection. Useful as a primitive for application-level cache invalidation.
      - Exposed via the idiomatic `database/sql` escape hatch `(*sql.Conn).Raw()`, consistent with the existing `FileControlPersistWAL`.                                                                    
      - See [GitLab merge request #115](https://gitlab.com/cznic/sqlite/-/merge_requests/115), thanks Ian Chechin!
