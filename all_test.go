@@ -4549,14 +4549,30 @@ func TestInMemoryDBSurvivesContextCancel(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Run a query that we cancel half-way through. database/sql
-		// returns the connection to the pool when the call returns.
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel() // pre-cancel: the next ExecContext will return immediately.
-		_, _ = db.ExecContext(ctx, "SELECT count(*) FROM t")
+		raw, err := db.Conn(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
 
-		// The bug: after the above call the connection is marked
-		// unusable and dropped, so the in-memory table is gone.
+		_ = raw.Raw(func(dc any) error {
+			c, ok := dc.(*conn)
+			if !ok {
+				t.Fatalf("driver conn is %T, want *conn", dc)
+			}
+			if !c.inMemory {
+				t.Fatalf("conn opened with file::memory: must be marked inMemory")
+			}
+			if !c.usable() {
+				t.Fatalf("fresh in-memory conn must be usable")
+			}
+			sqlite3.Xsqlite3_interrupt(c.tls, c.db)
+			if !c.usable() {
+				t.Errorf("in-memory conn must remain usable after interrupt (issue #196)")
+			}
+			return nil
+		})
+		raw.Close()
+
 		var n int
 		if err := db.QueryRow("SELECT count(*) FROM t").Scan(&n); err != nil {
 			t.Fatalf("table lost after ctx-cancel: %v", err)
