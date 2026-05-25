@@ -255,6 +255,39 @@ type FunctionImpl struct {
 	// MakeAggregate is called at the beginning of each evaluation of an
 	// aggregate function.
 	MakeAggregate func(ctx FunctionContext) (AggregateFunction, error)
+
+	// VolatileArgs is an opt-in performance flag that eliminates the per-call
+	// allocation of string and []byte argument bodies. When true, the driver
+	// passes argument strings and byte slices as zero-copy views into
+	// SQLite-owned memory instead of Go-allocated copies.
+	//
+	// Setting this is unsafe unless the user-provided Scalar / Step /
+	// WindowInverse callbacks treat string and []byte arguments as strictly
+	// transient: they must not be retained past the return of the call,
+	// neither directly (storing the slice or string in a struct field, map,
+	// channel, or outer-scope variable) nor indirectly (passing them to
+	// something that captures them, including most concurrency primitives).
+	//
+	// Retaining a volatile argument produces silent data corruption: SQLite
+	// reuses the underlying buffer for the next row, so on a later read every
+	// retained value will appear to hold the contents of the most recent row.
+	// The Go race detector cannot catch this because UDF execution is
+	// sequential on a single goroutine; the corruption is deterministic and
+	// invisible to -race.
+	//
+	// As a guard against accidental capture, callbacks that must retain
+	// values across rows should copy:
+	//
+	//	saved := append([]byte(nil), args[0].([]byte)...) // []byte
+	//	saved := string(append([]byte(nil), args[0].(string)...)) // string, no aliasing
+	//
+	// When in doubt, leave VolatileArgs at its default (false) — the driver
+	// already pools the argument-slice header (issue #226), so the per-row
+	// overhead with VolatileArgs=false is one make([]byte) per BLOB column
+	// and one libc.GoString per TEXT column, not a fresh slice header.
+	//
+	// VolatileArgs has no effect on integer, float, time, or NULL arguments.
+	VolatileArgs bool
 }
 
 // An AggregateFunction is an invocation of an aggregate or window function. See
@@ -266,13 +299,18 @@ type FunctionImpl struct {
 type AggregateFunction interface {
 	// Step is called for each row of an aggregate function's SQL
 	// invocation. The argument Values are not valid past the return of the
-	// function.
+	// function. When the aggregate was registered with
+	// [FunctionImpl.VolatileArgs] set to true, string and []byte arguments
+	// in rowArgs are zero-copy views into SQLite-owned memory and retaining
+	// them produces silent data corruption — see [FunctionImpl.VolatileArgs]
+	// for the full safety contract.
 	Step(ctx *FunctionContext, rowArgs []driver.Value) error
 
 	// WindowInverse is called to remove the oldest presently aggregated
 	// result of Step from the current window. The arguments are those
 	// passed to Step for the row being removed. The argument Values are not
-	// valid past the return of the function.
+	// valid past the return of the function. The same
+	// [FunctionImpl.VolatileArgs] caveat applies as for Step.
 	WindowInverse(ctx *FunctionContext, rowArgs []driver.Value) error
 
 	// WindowValue is called to get the current value of an aggregate
@@ -506,7 +544,7 @@ func registerFunction(
 	if impl.Scalar != nil {
 		xFuncs.mu.Lock()
 		id := xFuncs.ids.next()
-		xFuncs.m[id] = impl.Scalar
+		xFuncs.m[id] = xFuncEntry{fn: impl.Scalar, volatile: impl.VolatileArgs}
 		xFuncs.mu.Unlock()
 
 		udf.scalar = true
@@ -514,7 +552,7 @@ func registerFunction(
 	} else {
 		xAggregateFactories.mu.Lock()
 		id := xAggregateFactories.ids.next()
-		xAggregateFactories.m[id] = impl.MakeAggregate
+		xAggregateFactories.m[id] = xAggregateFactoryEntry{factory: impl.MakeAggregate, volatile: impl.VolatileArgs}
 		xAggregateFactories.mu.Unlock()
 
 		udf.pApp = id
@@ -594,7 +632,13 @@ func releaseUDFArgs(sp *[]driver.Value) {
 // functionArgs prepares a []driver.Value for one user-function invocation.
 // The returned slice is owned by the driver and must be released via
 // releaseUDFArgs once the user function returns.
-func functionArgs(tls *libc.TLS, argc int32, argv uintptr) *[]driver.Value {
+//
+// When volatile is true, SQLITE_TEXT and SQLITE_BLOB arguments are returned as
+// zero-copy views into SQLite-owned memory (see [FunctionImpl.VolatileArgs]
+// for the user-facing safety contract). When false (the default for all
+// existing call sites), text and blob payloads are copied into Go-owned
+// memory and stay valid for the lifetime of the slice.
+func functionArgs(tls *libc.TLS, argc int32, argv uintptr, volatile bool) *[]driver.Value {
 	sp := acquireUDFArgs(int(argc))
 	args := *sp
 	for i := int32(0); i < argc; i++ {
@@ -602,7 +646,17 @@ func functionArgs(tls *libc.TLS, argc int32, argv uintptr) *[]driver.Value {
 
 		switch valType := sqlite3.Xsqlite3_value_type(tls, valPtr); valType {
 		case sqlite3.SQLITE_TEXT:
-			args[i] = libc.GoString(sqlite3.Xsqlite3_value_text(tls, valPtr))
+			if volatile {
+				p := sqlite3.Xsqlite3_value_text(tls, valPtr)
+				n := sqlite3.Xsqlite3_value_bytes(tls, valPtr)
+				if p == 0 || n == 0 {
+					args[i] = ""
+				} else {
+					args[i] = unsafe.String((*byte)(unsafe.Pointer(p)), int(n))
+				}
+			} else {
+				args[i] = libc.GoString(sqlite3.Xsqlite3_value_text(tls, valPtr))
+			}
 		case sqlite3.SQLITE_INTEGER:
 			args[i] = sqlite3.Xsqlite3_value_int64(tls, valPtr)
 		case sqlite3.SQLITE_FLOAT:
@@ -612,11 +666,19 @@ func functionArgs(tls *libc.TLS, argc int32, argv uintptr) *[]driver.Value {
 		case sqlite3.SQLITE_BLOB:
 			size := sqlite3.Xsqlite3_value_bytes(tls, valPtr)
 			blobPtr := sqlite3.Xsqlite3_value_blob(tls, valPtr)
-			v := make([]byte, size)
-			if size != 0 {
-				copy(v, (*libc.RawMem)(unsafe.Pointer(blobPtr))[:size:size])
+			if volatile {
+				if blobPtr == 0 || size == 0 {
+					args[i] = []byte(nil)
+				} else {
+					args[i] = unsafe.Slice((*byte)(unsafe.Pointer(blobPtr)), int(size))
+				}
+			} else {
+				v := make([]byte, size)
+				if size != 0 {
+					copy(v, (*libc.RawMem)(unsafe.Pointer(blobPtr))[:size:size])
+				}
+				args[i] = v
 			}
-			args[i] = v
 		default:
 			panic(fmt.Sprintf("unexpected argument type %q passed by sqlite", valType))
 		}
@@ -682,26 +744,26 @@ func functionReturnValue(tls *libc.TLS, ctx uintptr, res driver.Value) error {
 var (
 	xFuncs = struct {
 		mu  sync.RWMutex
-		m   map[uintptr]func(*FunctionContext, []driver.Value) (driver.Value, error)
+		m   map[uintptr]xFuncEntry
 		ids idGen
 	}{
-		m: make(map[uintptr]func(*FunctionContext, []driver.Value) (driver.Value, error)),
+		m: make(map[uintptr]xFuncEntry),
 	}
 
 	xAggregateFactories = struct {
 		mu  sync.RWMutex
-		m   map[uintptr]func(FunctionContext) (AggregateFunction, error)
+		m   map[uintptr]xAggregateFactoryEntry
 		ids idGen
 	}{
-		m: make(map[uintptr]func(FunctionContext) (AggregateFunction, error)),
+		m: make(map[uintptr]xAggregateFactoryEntry),
 	}
 
 	xAggregateContext = struct {
 		mu  sync.RWMutex
-		m   map[uintptr]AggregateFunction
+		m   map[uintptr]xAggregateContextEntry
 		ids idGen
 	}{
-		m: make(map[uintptr]AggregateFunction),
+		m: make(map[uintptr]xAggregateContextEntry),
 	}
 
 	xCollations = struct {
@@ -712,6 +774,30 @@ var (
 		m: make(map[uintptr]func(string, string) int),
 	}
 )
+
+// xFuncEntry pairs a registered scalar function with the VolatileArgs flag
+// captured at registration time. Bundled so trampolines can decide whether to
+// pass zero-copy or copied argument values without a second map lookup.
+type xFuncEntry struct {
+	fn       func(*FunctionContext, []driver.Value) (driver.Value, error)
+	volatile bool
+}
+
+// xAggregateFactoryEntry pairs a registered aggregate factory with its
+// VolatileArgs flag, for the same reason as xFuncEntry.
+type xAggregateFactoryEntry struct {
+	factory  func(FunctionContext) (AggregateFunction, error)
+	volatile bool
+}
+
+// xAggregateContextEntry holds the AggregateFunction instance for one
+// in-flight aggregate evaluation together with the VolatileArgs flag inherited
+// from its factory registration. Caching the flag here avoids a second
+// xAggregateFactories lookup in the Step / WindowInverse trampolines.
+type xAggregateContextEntry struct {
+	fn       AggregateFunction
+	volatile bool
+}
 
 type idGen struct {
 	bitset []uint64
@@ -736,42 +822,42 @@ func (gen *idGen) reclaim(id uintptr) {
 	gen.bitset[bit/64] &^= 1 << (bit % 64)
 }
 
-func makeAggregate(tls *libc.TLS, ctx uintptr) (AggregateFunction, uintptr) {
+func makeAggregate(tls *libc.TLS, ctx uintptr) (AggregateFunction, bool, uintptr) {
 	goCtx := FunctionContext{tls: tls, ctx: ctx}
 	aggCtx := (*uintptr)(unsafe.Pointer(sqlite3.Xsqlite3_aggregate_context(tls, ctx, int32(ptrSize))))
 	setErrorResult := errorResultFunction(tls, ctx)
 	if aggCtx == nil {
 		setErrorResult(errors.New("insufficient memory for aggregate"))
-		return nil, 0
+		return nil, false, 0
 	}
 	if *aggCtx != 0 {
 		// Already created.
 		xAggregateContext.mu.RLock()
-		f := xAggregateContext.m[*aggCtx]
+		entry := xAggregateContext.m[*aggCtx]
 		xAggregateContext.mu.RUnlock()
-		return f, *aggCtx
+		return entry.fn, entry.volatile, *aggCtx
 	}
 
 	factoryID := sqlite3.Xsqlite3_user_data(tls, ctx)
 	xAggregateFactories.mu.RLock()
-	factory := xAggregateFactories.m[factoryID]
+	factoryEntry := xAggregateFactories.m[factoryID]
 	xAggregateFactories.mu.RUnlock()
 
-	f, err := factory(goCtx)
+	f, err := factoryEntry.factory(goCtx)
 	if err != nil {
 		setErrorResult(err)
-		return nil, 0
+		return nil, false, 0
 	}
 	if f == nil {
 		setErrorResult(errors.New("MakeAggregate function returned nil"))
-		return nil, 0
+		return nil, false, 0
 	}
 
 	xAggregateContext.mu.Lock()
 	*aggCtx = xAggregateContext.ids.next()
-	xAggregateContext.m[*aggCtx] = f
+	xAggregateContext.m[*aggCtx] = xAggregateContextEntry{fn: f, volatile: factoryEntry.volatile}
 	xAggregateContext.mu.Unlock()
-	return f, *aggCtx
+	return f, factoryEntry.volatile, *aggCtx
 }
 
 // cFuncPointer converts a function defined by a function declaration to a C pointer.
@@ -793,13 +879,13 @@ func cFuncPointer[T any](f T) uintptr {
 func funcTrampoline(tls *libc.TLS, ctx uintptr, argc int32, argv uintptr) {
 	id := sqlite3.Xsqlite3_user_data(tls, ctx)
 	xFuncs.mu.RLock()
-	xFunc := xFuncs.m[id]
+	entry := xFuncs.m[id]
 	xFuncs.mu.RUnlock()
 
 	setErrorResult := errorResultFunction(tls, ctx)
-	sp := functionArgs(tls, argc, argv)
+	sp := functionArgs(tls, argc, argv, entry.volatile)
 	defer releaseUDFArgs(sp)
-	res, err := xFunc(&FunctionContext{}, *sp)
+	res, err := entry.fn(&FunctionContext{}, *sp)
 
 	if err != nil {
 		setErrorResult(err)
@@ -828,13 +914,13 @@ func sqlite3AllocCString(tls *libc.TLS, s string) uintptr {
 }
 
 func stepTrampoline(tls *libc.TLS, ctx uintptr, argc int32, argv uintptr) {
-	impl, _ := makeAggregate(tls, ctx)
+	impl, volatile, _ := makeAggregate(tls, ctx)
 	if impl == nil {
 		return
 	}
 
 	setErrorResult := errorResultFunction(tls, ctx)
-	sp := functionArgs(tls, argc, argv)
+	sp := functionArgs(tls, argc, argv, volatile)
 	defer releaseUDFArgs(sp)
 	err := impl.Step(&FunctionContext{}, *sp)
 	if err != nil {
@@ -843,13 +929,13 @@ func stepTrampoline(tls *libc.TLS, ctx uintptr, argc int32, argv uintptr) {
 }
 
 func inverseTrampoline(tls *libc.TLS, ctx uintptr, argc int32, argv uintptr) {
-	impl, _ := makeAggregate(tls, ctx)
+	impl, volatile, _ := makeAggregate(tls, ctx)
 	if impl == nil {
 		return
 	}
 
 	setErrorResult := errorResultFunction(tls, ctx)
-	sp := functionArgs(tls, argc, argv)
+	sp := functionArgs(tls, argc, argv, volatile)
 	defer releaseUDFArgs(sp)
 	err := impl.WindowInverse(&FunctionContext{}, *sp)
 	if err != nil {
@@ -858,7 +944,7 @@ func inverseTrampoline(tls *libc.TLS, ctx uintptr, argc int32, argv uintptr) {
 }
 
 func valueTrampoline(tls *libc.TLS, ctx uintptr) {
-	impl, _ := makeAggregate(tls, ctx)
+	impl, _, _ := makeAggregate(tls, ctx)
 	if impl == nil {
 		return
 	}
@@ -876,7 +962,7 @@ func valueTrampoline(tls *libc.TLS, ctx uintptr) {
 }
 
 func finalTrampoline(tls *libc.TLS, ctx uintptr) {
-	impl, id := makeAggregate(tls, ctx)
+	impl, _, id := makeAggregate(tls, ctx)
 	if impl == nil {
 		return
 	}
