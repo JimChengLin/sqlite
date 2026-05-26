@@ -4523,3 +4523,101 @@ func TestDBPageVtab(t *testing.T) {
 		t.Errorf("Page 1 data is too short to contain a valid SQLite header: %d bytes", len(data))
 	}
 }
+
+// TestInMemoryDBSurvivesContextCancel is a regression test for #196:
+// after a context-cancelled query, an in-memory database connection must
+// not be discarded by database/sql; otherwise the entire in-memory store
+// is lost. The fix for #198 added an Xsqlite3_is_interrupted check to
+// (*conn).usable() that mistakenly applied to in-memory databases too,
+// reintroducing the bug originally fixed by !74.
+//
+// File-backed databases keep the existing behaviour: an interrupted
+// connection is still discarded, since the underlying data lives on disk.
+func TestInMemoryDBSurvivesContextCancel(t *testing.T) {
+	t.Run("in-memory", func(t *testing.T) {
+		db, err := sql.Open(driverName, "file::memory:?cache=shared")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		db.SetMaxOpenConns(1)
+
+		if _, err := db.Exec("CREATE TABLE t (v INT)"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec("INSERT INTO t VALUES (1), (2), (3)"); err != nil {
+			t.Fatal(err)
+		}
+
+		raw, err := db.Conn(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_ = raw.Raw(func(dc any) error {
+			c, ok := dc.(*conn)
+			if !ok {
+				t.Fatalf("driver conn is %T, want *conn", dc)
+			}
+			if !c.inMemory {
+				t.Fatalf("conn opened with file::memory: must be marked inMemory")
+			}
+			if !c.usable() {
+				t.Fatalf("fresh in-memory conn must be usable")
+			}
+			sqlite3.Xsqlite3_interrupt(c.tls, c.db)
+			if !c.usable() {
+				t.Errorf("in-memory conn must remain usable after interrupt (issue #196)")
+			}
+			return nil
+		})
+		raw.Close()
+
+		var n int
+		if err := db.QueryRow("SELECT count(*) FROM t").Scan(&n); err != nil {
+			t.Fatalf("table lost after ctx-cancel: %v", err)
+		}
+		if n != 3 {
+			t.Fatalf("expected 3 rows after ctx-cancel, got %d", n)
+		}
+	})
+
+	t.Run("file-backed connection still discarded on interrupt", func(t *testing.T) {
+		// Sanity check that the fix for #198 is preserved: a file-backed
+		// connection that was actually interrupted is still reported as
+		// unusable so that database/sql will drop it.
+		dir := t.TempDir()
+		db, err := sql.Open(driverName, "file:"+filepath.Join(dir, "t.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		db.SetMaxOpenConns(1)
+
+		raw, err := db.Conn(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer raw.Close()
+
+		// Confirm that IsValid honours the interrupted state on a
+		// file-backed conn.
+		_ = raw.Raw(func(dc any) error {
+			c, ok := dc.(*conn)
+			if !ok {
+				t.Fatalf("driver conn is %T, want *conn", dc)
+			}
+			if c.inMemory {
+				t.Fatalf("file-backed conn unexpectedly marked inMemory")
+			}
+			if !c.usable() {
+				t.Fatalf("fresh file-backed conn must be usable")
+			}
+			sqlite3.Xsqlite3_interrupt(c.tls, c.db)
+			if c.usable() {
+				t.Errorf("file-backed conn must be reported unusable after interrupt")
+			}
+			return nil
+		})
+	})
+}
