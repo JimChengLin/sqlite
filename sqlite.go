@@ -286,6 +286,12 @@ type FunctionImpl struct {
 	// overhead with VolatileArgs=false is one make([]byte) per BLOB column
 	// and one libc.GoString per TEXT column, not a fresh slice header.
 	//
+	// Similarly, do not re-enter SQLite on the same connection while a
+	// volatile argument is in scope. A nested Query/Exec on the same conn
+	// can cause SQLite to reuse the underlying value buffers, so a volatile
+	// string or []byte read before the nested call may alias different
+	// bytes after it returns.
+	//
 	// VolatileArgs has no effect on integer, float, time, or NULL arguments.
 	VolatileArgs bool
 }
@@ -668,7 +674,7 @@ func functionArgs(tls *libc.TLS, argc int32, argv uintptr, volatile bool) *[]dri
 			blobPtr := sqlite3.Xsqlite3_value_blob(tls, valPtr)
 			if volatile {
 				if blobPtr == 0 || size == 0 {
-					args[i] = []byte(nil)
+					args[i] = make([]byte, 0)
 				} else {
 					args[i] = unsafe.Slice((*byte)(unsafe.Pointer(blobPtr)), int(size))
 				}
