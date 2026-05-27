@@ -48,7 +48,7 @@ When debugging into `libc`, use `make work` (or a manual `go work init && go wor
 ## Repository / release workflow
 
 - The canonical repo is GitLab `cznic/sqlite`. The GitHub `modernc-org/sqlite` mirror **does accept** issues and PRs, but PRs land via a manual cross-merge into GitLab — there can be a delay. The PRs listed in `CHANGELOG.md` (e.g. "merge request #113") are GitLab MR numbers, not GitHub PRs.
-- Per `HACKING.md`: tagging is automatic since 2024-03-12 — don't manually tag unless asked. Manual tags must wait until [the builder dashboard](https://modern-c.appspot.com/-/builder/?importpath=modernc.org%2fsqlite) is green for all platforms listed in `builder.json`.
+- Per `HACKING.md`: this repo is **not** auto-tagged — `builder.json` has `"autotag": "<none>"` because too many projects depend on `modernc.org/sqlite` to risk bot tagging. Releases are tagged **manually by the maintainer**; don't tag unless asked, and only once [the builder dashboard](https://modern-c.appspot.com/-/builder/?importpath=modernc.org%2fsqlite) is green for all platforms listed in `builder.json`.
 - `go.mod` `retract` directives encode known-broken versions; treat them as load-bearing — don't remove entries when bumping the module.
 
 ## Driver registration model
