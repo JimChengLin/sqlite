@@ -180,10 +180,12 @@ type Updater interface {
 //     return of the method, directly (stored in a struct, map, channel, or
 //     outer-scope variable) or indirectly (passed to anything that captures
 //     them).
+//
 //   - Retaining a volatile argument produces silent data corruption: SQLite
 //     reuses the underlying buffer for the next row, so a retained value
 //     will later appear to hold a different row's bytes. The race detector
 //     cannot catch this; callbacks run sequentially on a single goroutine.
+//
 //   - To keep a value across rows, copy it:
 //
 //     saved := append([]byte(nil), v.([]byte)...)             // BLOB
