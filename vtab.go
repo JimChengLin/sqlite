@@ -66,9 +66,16 @@ var (
 )
 
 // goModule wraps a vtab.Module implementation with its name.
+//
+// volatile mirrors the opt-in from [vtab.VolatileArgsOpter]: when true, the
+// engine passes argument string/[]byte bodies to Cursor.Filter and Updater
+// Insert/Update as zero-copy views into SQLite-owned memory. The flag is
+// captured once, when the module is registered on a connection, and shared
+// by every table created from this module.
 type goModule struct {
-	name string
-	impl vtab.Module
+	name     string
+	impl     vtab.Module
+	volatile bool
 }
 
 // goTable wraps a vtab.Table implementation and remembers its module.
@@ -116,7 +123,11 @@ func (c *conn) registerSingleModule(name string, m vtab.Module) error {
 		modID = vtabModules.ids.next()
 		vtabModules.name2id[name] = modID
 	}
-	vtabModules.m[modID] = &goModule{name: name, impl: m}
+	gm := &goModule{name: name, impl: m}
+	if v, ok := m.(vtab.VolatileArgsOpter); ok {
+		gm.volatile = v.VolatileArgs()
+	}
+	vtabModules.m[modID] = gm
 	vtabModules.mu.Unlock()
 
 	nativeModules.mu.Lock()
@@ -542,7 +553,8 @@ func vtabFilterTrampoline(tls *libc.TLS, pCursor uintptr, idxNum int32, idxStr u
 	if idxStr != 0 {
 		idxStrGo = libc.GoString(idxStr)
 	}
-	sp := functionArgs(tls, argc, argv, false)
+	volatile := gc.table != nil && gc.table.mod != nil && gc.table.mod.volatile
+	sp := functionArgs(tls, argc, argv, volatile)
 	defer releaseUDFArgs(sp)
 	err := gc.impl.Filter(int(idxNum), idxStrGo, *sp)
 	if err != nil {
@@ -762,7 +774,8 @@ func vtabUpdateTrampoline(tls *libc.TLS, pVtab uintptr, argc int32, argv uintptr
 	nCols := argc - 2
 	// Extract column values starting from argv[2]
 	colsPtr := argv + uintptr(2)*sqliteValPtrSize
-	sp := functionArgs(tls, nCols, colsPtr, false)
+	volatile := gt.mod != nil && gt.mod.volatile
+	sp := functionArgs(tls, nCols, colsPtr, volatile)
 	defer releaseUDFArgs(sp)
 	cols := *sp
 
