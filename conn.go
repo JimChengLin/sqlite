@@ -211,9 +211,19 @@ func (c *conn) columnText(pstmt uintptr, iCol int) (v string, err error) {
 		return "", nil
 	}
 
+	// Copy the SQLite-owned UTF-8 bytes into a fresh Go-owned buffer, then
+	// reinterpret that buffer as a string without a second copy. The default
+	// string(b) conversion calls runtime.slicebytetostring, which mallocs a
+	// new backing array and memcpys b into it because the compiler must
+	// assume the caller could mutate b. Here b is local to this function and
+	// is never written to again after the copy above, so it is safe to view
+	// it as the string's backing memory directly. The string is immutable
+	// from Go's perspective, b becomes unreachable as a []byte after we
+	// return, and the GC keeps the underlying array alive for as long as the
+	// returned string is reachable.
 	b := make([]byte, len)
 	copy(b, (*libc.RawMem)(unsafe.Pointer(p))[:len:len])
-	return string(b), nil
+	return unsafe.String(unsafe.SliceData(b), len), nil
 }
 
 // C documentation
