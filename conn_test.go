@@ -6,6 +6,7 @@ package sqlite
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -159,4 +160,153 @@ func BenchmarkColumnTextScanMedium(b *testing.B) {
 // is the dominant cost.
 func BenchmarkColumnTextScanLong(b *testing.B) {
 	benchColumnTextScan(b, 4096)
+}
+
+// TestColumnTypeDatabaseTypeNameCache verifies that the rows decltype cache
+// returns the same uppercase declared type for every row of a result set
+// (across multiple Next calls) and matches the schema's declared type case-
+// insensitively. The result is compared against a Next loop that reads the
+// decltype on each row, so a stale or per-row regression would surface as a
+// type-name mismatch between the two readers.
+func TestColumnTypeDatabaseTypeNameCache(t *testing.T) {
+	db, err := sql.Open(driverName, "file::memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Mix declared types in different cases and across all SQLite storage
+	// classes. The varied casing exercises the strings.ToUpper path of the
+	// cache.
+	if _, err := db.Exec(`CREATE TABLE t (a integer, b TEXT, c BlOb, d DATETIME, e Date, f boolean)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO t VALUES (1, 'x', X'00', '2025-01-15 10:30:00', '2025-01-15', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO t VALUES (2, 'y', X'01', '2025-01-16 11:00:00', '2025-01-16', 0)`); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := db.Query(`SELECT a, b, c, d, e, f FROM t`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	types, err := rows.ColumnTypes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTypes := []string{"INTEGER", "TEXT", "BLOB", "DATETIME", "DATE", "BOOLEAN"}
+	if len(types) != len(wantTypes) {
+		t.Fatalf("column count: got %d, want %d", len(types), len(wantTypes))
+	}
+	for i, ct := range types {
+		if got := ct.DatabaseTypeName(); got != wantTypes[i] {
+			t.Errorf("column %d: got %q, want %q", i, got, wantTypes[i])
+		}
+	}
+
+	// Drain rows; reading the cache for every row of a multi-row scan must
+	// keep returning the same values for the lifetime of the result set.
+	rowCount := 0
+	for rows.Next() {
+		rowCount++
+		for i, ct := range types {
+			if got := ct.DatabaseTypeName(); got != wantTypes[i] {
+				t.Errorf("row %d column %d: got %q, want %q (cache changed mid-scan)", rowCount, i, got, wantTypes[i])
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if rowCount != 2 {
+		t.Errorf("row count: got %d, want 2", rowCount)
+	}
+}
+
+// benchTextToTimeScan exercises the rows.Next + Scan path under
+// _texttotime=1, which fires r.ColumnTypeDatabaseTypeName(i) for every TEXT
+// column on every row to decide whether to parse the value as time. Before
+// the decltype cache landed, each call did a libc.GoString + strings.ToUpper
+// per row per column. With the cache the lookup is a single slice index.
+func benchTextToTimeScan(b *testing.B, columnCount int) {
+	db, err := sql.Open(driverName, "file::memory:?_texttotime=1")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer db.Close()
+
+	var schemaCols, selectCols, insertCols, insertVals []string
+	for i := 0; i < columnCount; i++ {
+		schemaCols = append(schemaCols, fmt.Sprintf("c%d DATETIME", i))
+		selectCols = append(selectCols, fmt.Sprintf("c%d", i))
+		insertCols = append(insertCols, fmt.Sprintf("c%d", i))
+		insertVals = append(insertVals, "?")
+	}
+	if _, err := db.Exec(`CREATE TABLE t (` + strings.Join(schemaCols, ", ") + `)`); err != nil {
+		b.Fatal(err)
+	}
+
+	const rows = 1000
+	tx, err := db.Begin()
+	if err != nil {
+		b.Fatal(err)
+	}
+	stmt, err := tx.Prepare(`INSERT INTO t (` + strings.Join(insertCols, ", ") + `) VALUES (` + strings.Join(insertVals, ", ") + `)`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	args := make([]any, columnCount)
+	for i := 0; i < columnCount; i++ {
+		args[i] = "2025-01-15 10:30:00"
+	}
+	for i := 0; i < rows; i++ {
+		if _, err := stmt.Exec(args...); err != nil {
+			b.Fatal(err)
+		}
+	}
+	stmt.Close()
+	if err := tx.Commit(); err != nil {
+		b.Fatal(err)
+	}
+
+	query := `SELECT ` + strings.Join(selectCols, ", ") + ` FROM t`
+	dest := make([]any, columnCount)
+	destPtrs := make([]any, columnCount)
+	for i := range dest {
+		destPtrs[i] = &dest[i]
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r, err := db.Query(query)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for r.Next() {
+			if err := r.Scan(destPtrs...); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := r.Err(); err != nil {
+			b.Fatal(err)
+		}
+		r.Close()
+	}
+}
+
+// BenchmarkTextToTimeScan1Col measures the _texttotime=1 hot path with a
+// single DATETIME column, isolating the per-row decltype lookup cost.
+func BenchmarkTextToTimeScan1Col(b *testing.B) {
+	benchTextToTimeScan(b, 1)
+}
+
+// BenchmarkTextToTimeScan5Cols measures the same path with a wider result
+// set so the cache savings scale linearly with column count.
+func BenchmarkTextToTimeScan5Cols(b *testing.B) {
+	benchTextToTimeScan(b, 5)
 }
