@@ -7,8 +7,10 @@ package sqlite
 import (
 	"database/sql"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestColumnTextScan exercises the rows.Scan TEXT-column path that
@@ -309,4 +311,88 @@ func BenchmarkTextToTimeScan1Col(b *testing.B) {
 // set so the cache savings scale linearly with column count.
 func BenchmarkTextToTimeScan5Cols(b *testing.B) {
 	benchTextToTimeScan(b, 5)
+}
+
+// TestColumnTypeScanTypeDecltypeCache locks down the ColumnTypeScanType comparison logic
+// that was rewritten from a lowercase decltype switch to the cached uppercase
+// switch. Each of the four arms that look at the cache (INTEGER -> BOOLEAN,
+// INTEGER -> DATE/DATETIME/TIME/TIMESTAMP, TEXT default, TEXT under
+// _texttotime -> DATE/DATETIME/TIME/TIMESTAMP) gets a column with a
+// mixed-case declared type so a regression on the case-folding path would
+// surface as a wrong reflect.Type for that column.
+func TestColumnTypeScanTypeDecltypeCache(t *testing.T) {
+	// Each case inserts one row before querying so ColumnTypeScanType sees
+	// the actual storage class (sqlite3_column_type), not SQLITE_NULL.
+	cases := []struct {
+		dsn   string
+		col   string
+		value any
+		want  reflect.Type
+		label string
+	}{
+		// INTEGER + BOOLEAN decltype (case-insensitive) always returns bool.
+		{"file::memory:", "b BoOlEaN", int64(1), reflect.TypeOf(false), "BOOLEAN INTEGER default"},
+		{"file::memory:?_texttotime=1", "b boolean", int64(0), reflect.TypeOf(false), "BOOLEAN INTEGER + _texttotime"},
+
+		// INTEGER + DATE/DATETIME/TIME/TIMESTAMP decltype always returns
+		// time.Time independent of any DSN flag (the cache-driven switch
+		// has no flag gate on the INTEGER arm).
+		{"file::memory:", "d Date", int64(1736899200), reflect.TypeOf(time.Time{}), "DATE INTEGER default"},
+		{"file::memory:", "dt datetime", int64(1736941800), reflect.TypeOf(time.Time{}), "DATETIME INTEGER default"},
+		{"file::memory:", "tm TIME", int64(37800), reflect.TypeOf(time.Time{}), "TIME INTEGER default"},
+		{"file::memory:", "ts TimeStamp", int64(1736941800), reflect.TypeOf(time.Time{}), "TIMESTAMP INTEGER default"},
+
+		// INTEGER without a recognised decltype falls back to int64.
+		{"file::memory:", "n integer", int64(42), reflect.TypeOf(int64(0)), "plain INTEGER default"},
+		{"file::memory:", "x BIGINT", int64(42), reflect.TypeOf(int64(0)), "unrecognised INTEGER decltype"},
+
+		// TEXT default returns string, even for DATETIME-shaped decltypes,
+		// because the textToTime opt-in is off.
+		{"file::memory:", "s TEXT", "hello", reflect.TypeOf(""), "plain TEXT default"},
+		{"file::memory:", "dt DateTime", "2025-01-15 10:30:00", reflect.TypeOf(""), "DATETIME TEXT default (no textToTime)"},
+
+		// TEXT under _texttotime=1 returns time.Time for the four recognised
+		// decltypes (mixed case), and string for everything else.
+		{"file::memory:?_texttotime=1", "d Date", "2025-01-15", reflect.TypeOf(time.Time{}), "DATE TEXT + _texttotime"},
+		{"file::memory:?_texttotime=1", "dt DateTime", "2025-01-15 10:30:00", reflect.TypeOf(time.Time{}), "DATETIME TEXT + _texttotime"},
+		{"file::memory:?_texttotime=1", "tm time", "10:30:00", reflect.TypeOf(time.Time{}), "TIME TEXT + _texttotime"},
+		{"file::memory:?_texttotime=1", "ts TIMESTAMP", "2025-01-15 10:30:00", reflect.TypeOf(time.Time{}), "TIMESTAMP TEXT + _texttotime"},
+		{"file::memory:?_texttotime=1", "s TEXT", "hello", reflect.TypeOf(""), "plain TEXT + _texttotime"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.label, func(t *testing.T) {
+			db, err := sql.Open(driverName, c.dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+
+			if _, err := db.Exec(`CREATE TABLE t (` + c.col + `)`); err != nil {
+				t.Fatalf("create table: %v", err)
+			}
+			if _, err := db.Exec(`INSERT INTO t VALUES (?)`, c.value); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+			rows, err := db.Query(`SELECT * FROM t`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			if !rows.Next() {
+				t.Fatal("expected one row")
+			}
+
+			types, err := rows.ColumnTypes()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(types) != 1 {
+				t.Fatalf("column count: got %d, want 1", len(types))
+			}
+			if got := types[0].ScanType(); got != c.want {
+				t.Errorf("ScanType: got %v, want %v", got, c.want)
+			}
+		})
+	}
 }
