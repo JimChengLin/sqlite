@@ -20,7 +20,14 @@ type rows struct {
 	allocs  []uintptr
 	c       *conn
 	columns []string
-	pstmt   uintptr
+	// decltypes holds the uppercased declared types for every result column,
+	// captured once at newRows time. The declared type of a column is fixed
+	// for the lifetime of a prepared statement, so caching the result of
+	// strings.ToUpper(sqlite3_column_decltype(...)) here removes a per-row
+	// libc.GoString + strings.ToUpper from the Next() hot path for callers
+	// that hit the time-conversion branches (_texttotime, _time_format).
+	decltypes []string
+	pstmt     uintptr
 
 	doStep    bool
 	empty     bool
@@ -48,10 +55,12 @@ func newRows(c *conn, pstmt uintptr, allocs *[]uintptr, empty bool) (r *rows, er
 	}
 
 	r.columns = make([]string, n)
+	r.decltypes = make([]string, n)
 	for i := range r.columns {
 		if r.columns[i], err = r.c.columnName(pstmt, i); err != nil {
 			return nil, err
 		}
+		r.decltypes[i] = strings.ToUpper(r.c.columnDeclType(pstmt, i))
 	}
 
 	return r, nil
@@ -201,7 +210,7 @@ func (r *rows) Next(dest []driver.Value) (err error) {
 // "CHAR", "TEXT", "DECIMAL", "SMALLINT", "INT", "BIGINT", "BOOL", "[]BIGINT",
 // "JSONB", "XML", "TIMESTAMP".
 func (r *rows) ColumnTypeDatabaseTypeName(index int) string {
-	return strings.ToUpper(r.c.columnDeclType(r.pstmt, index))
+	return r.decltypes[index]
 }
 
 // RowsColumnTypeLength may be implemented by Rows. It should return the length
@@ -268,10 +277,10 @@ func (r *rows) ColumnTypeScanType(index int) reflect.Type {
 
 	switch t {
 	case sqlite3.SQLITE_INTEGER:
-		switch strings.ToLower(r.c.columnDeclType(r.pstmt, index)) {
-		case "boolean":
+		switch r.decltypes[index] {
+		case "BOOLEAN":
 			return reflect.TypeOf(false)
-		case "date", "datetime", "time", "timestamp":
+		case "DATE", "DATETIME", "TIME", "TIMESTAMP":
 			return reflect.TypeOf(time.Time{})
 		default:
 			return reflect.TypeOf(int64(0))
@@ -280,8 +289,8 @@ func (r *rows) ColumnTypeScanType(index int) reflect.Type {
 		return reflect.TypeOf(float64(0))
 	case sqlite3.SQLITE_TEXT:
 		if r.c.textToTime {
-			switch strings.ToLower(r.c.columnDeclType(r.pstmt, index)) {
-			case "date", "datetime", "time", "timestamp":
+			switch r.decltypes[index] {
+			case "DATE", "DATETIME", "TIME", "TIMESTAMP":
 				return reflect.TypeOf(time.Time{})
 			}
 		}
