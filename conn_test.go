@@ -396,3 +396,133 @@ func TestColumnTypeScanTypeDecltypeCache(t *testing.T) {
 		})
 	}
 }
+
+// TestParseTimeFormatCache verifies that the per-rows-per-column format-index
+// hint reused by (*conn).parseTime keeps returning correct parsed time values
+// across many rows of a steady-format column, and that a column whose format
+// switches mid-result-set still parses correctly via the fallthrough path.
+func TestParseTimeFormatCache(t *testing.T) {
+	db, err := sql.Open(driverName, "file::memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`CREATE TABLE t (id INTEGER PRIMARY KEY, dt DATETIME)`); err != nil {
+		t.Fatal(err)
+	}
+
+	// First three rows use the same canonical SQLite TEXT format (matches
+	// format index 2 of parseTimeFormats: "2006-01-02 15:04:05.999999999").
+	// Row 4 uses the ISO-T format (matches index 3). Row 5 uses the
+	// date-only fallback (index 6). After the cache stabilises on row 1, the
+	// hinted format helps rows 2 and 3 directly and rows 4-5 fall through.
+	values := []string{
+		"2025-01-15 10:30:00",
+		"2025-01-15 11:00:00",
+		"2025-01-15 11:30:00",
+		"2025-01-16T08:15:00",
+		"2025-01-17",
+	}
+	for i, v := range values {
+		if _, err := db.Exec(`INSERT INTO t(id, dt) VALUES (?, ?)`, i+1, v); err != nil {
+			t.Fatalf("insert id=%d: %v", i+1, err)
+		}
+	}
+
+	rows, err := db.Query(`SELECT dt FROM t ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	wantTimes := []time.Time{
+		time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC),
+		time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC),
+		time.Date(2025, 1, 15, 11, 30, 0, 0, time.UTC),
+		time.Date(2025, 1, 16, 8, 15, 0, 0, time.UTC),
+		time.Date(2025, 1, 17, 0, 0, 0, 0, time.UTC),
+	}
+	i := 0
+	for rows.Next() {
+		if i >= len(wantTimes) {
+			t.Fatalf("too many rows; want %d", len(wantTimes))
+		}
+		var got time.Time
+		if err := rows.Scan(&got); err != nil {
+			t.Fatalf("row %d scan: %v", i, err)
+		}
+		if !got.Equal(wantTimes[i]) {
+			t.Errorf("row %d: got %v, want %v", i, got, wantTimes[i])
+		}
+		i++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if i != len(wantTimes) {
+		t.Fatalf("row count: got %d, want %d", i, len(wantTimes))
+	}
+}
+
+// benchParseTimeScan exercises the rows.Next + Scan path on a DATETIME TEXT
+// column. With the parseTime format-index cache, every row after the first
+// hits the hinted format directly; without the cache, every row re-walks
+// the parseTimeFormats list until it finds a match.
+func benchParseTimeScan(b *testing.B) {
+	db, err := sql.Open(driverName, "file::memory:")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`CREATE TABLE t (dt DATETIME)`); err != nil {
+		b.Fatal(err)
+	}
+
+	const rows = 1000
+	tx, err := db.Begin()
+	if err != nil {
+		b.Fatal(err)
+	}
+	stmt, err := tx.Prepare(`INSERT INTO t (dt) VALUES (?)`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for i := 0; i < rows; i++ {
+		// Canonical SQLite TEXT datetime format (index 2 of
+		// parseTimeFormats).
+		if _, err := stmt.Exec("2025-01-15 10:30:00"); err != nil {
+			b.Fatal(err)
+		}
+	}
+	stmt.Close()
+	if err := tx.Commit(); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r, err := db.Query(`SELECT dt FROM t`)
+		if err != nil {
+			b.Fatal(err)
+		}
+		var got time.Time
+		for r.Next() {
+			if err := r.Scan(&got); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := r.Err(); err != nil {
+			b.Fatal(err)
+		}
+		r.Close()
+	}
+}
+
+// BenchmarkParseTimeScan measures the rows.Next DATETIME TEXT path with the
+// format-index cache active.
+func BenchmarkParseTimeScan(b *testing.B) {
+	benchParseTimeScan(b)
+}

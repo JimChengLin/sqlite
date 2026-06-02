@@ -27,7 +27,18 @@ type rows struct {
 	// libc.GoString + strings.ToUpper from the Next() hot path for callers
 	// that hit the time-conversion branches (_texttotime, _time_format).
 	decltypes []string
-	pstmt     uintptr
+	// parseFmtIdx caches, per column, the index into parseTimeFormats that
+	// matched the first successful (*conn).parseTime call on that column.
+	// Subsequent rows reuse the saved index as the first attempt instead of
+	// re-walking the format list from the top. Slot value -1 means no match
+	// has been recorded yet (either parseTime has not run on this column, or
+	// the parseTimeString / m= branch matched, which is not in
+	// parseTimeFormats). The cache is sticky: once a successful index is
+	// stored it is not overwritten if a later row happens to match a
+	// different format, so mixed-format columns still pay only the original
+	// fallthrough cost and a steady column wins on every subsequent row.
+	parseFmtIdx []int8
+	pstmt       uintptr
 
 	doStep    bool
 	empty     bool
@@ -56,11 +67,13 @@ func newRows(c *conn, pstmt uintptr, allocs *[]uintptr, empty bool) (r *rows, er
 
 	r.columns = make([]string, n)
 	r.decltypes = make([]string, n)
+	r.parseFmtIdx = make([]int8, n)
 	for i := range r.columns {
 		if r.columns[i], err = r.c.columnName(pstmt, i); err != nil {
 			return nil, err
 		}
 		r.decltypes[i] = strings.ToUpper(r.c.columnDeclType(pstmt, i))
+		r.parseFmtIdx[i] = -1
 	}
 
 	return r, nil
@@ -179,7 +192,11 @@ func (r *rows) Next(dest []driver.Value) (err error) {
 
 				switch r.ColumnTypeDatabaseTypeName(i) {
 				case "DATE", "DATETIME", "TIMESTAMP":
-					dest[i], _ = r.c.parseTime(v)
+					val, ok, idx := r.c.parseTime(v, int(r.parseFmtIdx[i]))
+					if ok && r.parseFmtIdx[i] < 0 && idx >= 0 {
+						r.parseFmtIdx[i] = int8(idx)
+					}
+					dest[i] = val
 				default:
 					dest[i] = v
 				}
