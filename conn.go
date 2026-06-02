@@ -102,29 +102,49 @@ func newConn(dsn string) (*conn, error) {
 	return c, nil
 }
 
-// Attempt to parse s as a time. Return (s, false) if s is not
-// recognized as a valid time encoding.
-func (c *conn) parseTime(s string) (interface{}, bool) {
+// parseTime attempts to parse s as a time encoding. If hintIdx is a valid
+// index into parseTimeFormats, that format is tried before the rest of the
+// list; otherwise the search runs in declaration order. The returned int is
+// the index of the format that matched, or -1 if the parseTimeString
+// (t.String()) branch matched or all formats failed. Callers that scan many
+// rows of a same-format column can feed the previous match back as hintIdx
+// to skip the redundant time.Parse attempts that would otherwise run for
+// every row.
+//
+// Return value contract is preserved: (parsed-value, ok). On failure the
+// value is the original input string and ok is false.
+func (c *conn) parseTime(s string, hintIdx int) (interface{}, bool, int) {
 	if v, ok := c.parseTimeString(s, strings.Index(s, "m=")); ok {
-		return v, true
+		return v, true, -1
 	}
 
 	ts, hadZ := strings.CutSuffix(s, "Z")
 
-	for _, f := range parseTimeFormats {
-		var t time.Time
-		var err error
+	tryFormat := func(f string) (time.Time, error) {
 		if c.loc != nil && !hadZ {
-			t, err = time.ParseInLocation(f, ts, c.loc)
-		} else {
-			t, err = time.Parse(f, ts)
+			return time.ParseInLocation(f, ts, c.loc)
 		}
-		if err == nil {
-			return c.applyTimezone(t), true
+		return time.Parse(f, ts)
+	}
+
+	// Try the caller's hint first, if any.
+	if hintIdx >= 0 && hintIdx < len(parseTimeFormats) {
+		if t, err := tryFormat(parseTimeFormats[hintIdx]); err == nil {
+			return c.applyTimezone(t), true, hintIdx
 		}
 	}
 
-	return s, false
+	// Sequential fallthrough, skipping the hint we already tried.
+	for i, f := range parseTimeFormats {
+		if i == hintIdx {
+			continue
+		}
+		if t, err := tryFormat(f); err == nil {
+			return c.applyTimezone(t), true, i
+		}
+	}
+
+	return s, false, -1
 }
 
 // Attempt to parse s as a time string produced by t.String().  If x > 0 it's
