@@ -35,8 +35,10 @@ type rows struct {
 	// the parseTimeString / m= branch matched, which is not in
 	// parseTimeFormats). The cache is sticky: once a successful index is
 	// stored it is not overwritten if a later row happens to match a
-	// different format, so mixed-format columns still pay only the original
-	// fallthrough cost and a steady column wins on every subsequent row.
+	// different format. A steady-format column therefore wins on every row
+	// after the first; a mixed-format column falls through as before, paying
+	// at most one extra format probe on rows whose matching format precedes
+	// the cached one.
 	parseFmtIdx []int8
 	pstmt       uintptr
 
