@@ -538,6 +538,36 @@ func (bt *minweightBtree) clearRoot(root uint32, intKey bool) (int, error) {
 	return len(rows), nil
 }
 
+func (bt *minweightBtree) moveRoot(from uint32, to uint32, intKey bool) error {
+	rows, err := bt.loadRows(from, intKey)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		var key []byte
+		if intKey {
+			key = minweightTableKey(to, row.rowid)
+		} else {
+			key = minweightIndexKey(to, row.key)
+		}
+		if err := bt.store.Put(key, row.payload); err != nil {
+			return err
+		}
+	}
+	for _, row := range rows {
+		var key []byte
+		if intKey {
+			key = minweightTableKey(from, row.rowid)
+		} else {
+			key = minweightIndexKey(from, row.key)
+		}
+		if _, err := bt.store.Delete(key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (bt *minweightBtree) noteInsert(root uint32, rowid int64, existed bool) {
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
@@ -2211,20 +2241,43 @@ func (e *minweightStorageEngine) BtreeDropTable(ctx BtreeContext, p BtreeHandle,
 	if rc := bt.ensureWritable(); rc != SQLITE_OK {
 		return rc
 	}
+	root := uint32(iTable)
 	bt.mu.Lock()
-	table := bt.tables[uint32(iTable)]
+	table := bt.tables[root]
+	autoVacuum := bt.autoVacuum
+	lastRoot := bt.next
+	movedTable := bt.tables[lastRoot]
 	bt.mu.Unlock()
 	if table.intKey {
-		e.invalidateIncrblobCursors(bt, uint32(iTable), 0, true)
+		e.invalidateIncrblobCursors(bt, root, 0, true)
 	}
-	if _, err := bt.clearRoot(uint32(iTable), table.intKey); err != nil {
+	if _, err := bt.clearRoot(root, table.intKey); err != nil {
 		return minweightSQLiteError(err)
 	}
+	moved := uint32(0)
+	if autoVacuum != BTREE_AUTOVACUUM_NONE && root < lastRoot {
+		if err := bt.moveRoot(lastRoot, root, movedTable.intKey); err != nil {
+			return minweightSQLiteError(err)
+		}
+		moved = lastRoot
+	}
 	bt.mu.Lock()
-	delete(bt.tables, uint32(iTable))
+	delete(bt.tables, root)
+	if autoVacuum != BTREE_AUTOVACUUM_NONE {
+		delete(bt.tables, lastRoot)
+		if moved != 0 {
+			bt.tables[root] = movedTable
+		}
+		if lastRoot > 1 {
+			bt.next = lastRoot - 1
+		} else {
+			bt.next = 1
+		}
+		bt.meta[BTREE_LARGEST_ROOT_PAGE] = bt.next
+	}
 	bt.mu.Unlock()
 	if !piMoved.IsNil() {
-		piMoved.PutInt32(0)
+		piMoved.PutInt32(int32(moved))
 	}
 	bt.dataVer++
 	return SQLITE_OK

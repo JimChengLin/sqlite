@@ -433,6 +433,51 @@ func TestMinweightStorageEngineVacuumTransfersRows(t *testing.T) {
 	}
 }
 
+func TestMinweightStorageEngineDropTableMovesAutoVacuumRoot(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	execMinweightSQL(t, db, "PRAGMA auto_vacuum = FULL")
+	execMinweightSQL(t, db, "CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, db, "CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, db, "CREATE INDEX b_v ON b(v)")
+	execMinweightSQL(t, db, "INSERT INTO b(id, v) VALUES (1, 'one'), (2, 'two')")
+
+	before := minweightRootPages(t, db, "a", "b", "b_v")
+	wantBefore := map[string]int{"a": 2, "b": 3, "b_v": 4}
+	if !reflect.DeepEqual(before, wantBefore) {
+		t.Fatalf("rootpages before drop = %v, want %v", before, wantBefore)
+	}
+
+	execMinweightSQL(t, db, "DROP TABLE a")
+
+	after := minweightRootPages(t, db, "b", "b_v")
+	wantAfter := map[string]int{"b": 3, "b_v": 2}
+	if !reflect.DeepEqual(after, wantAfter) {
+		t.Fatalf("rootpages after drop = %v, want %v", after, wantAfter)
+	}
+	var integrity string
+	if err := db.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil {
+		t.Fatal(err)
+	}
+	if integrity != "ok" {
+		t.Fatalf("integrity_check = %q, want ok", integrity)
+	}
+
+	var id int
+	if err := db.QueryRow("SELECT id FROM b INDEXED BY b_v WHERE v = 'two'").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if id != 2 {
+		t.Fatalf("indexed lookup id = %d, want 2", id)
+	}
+}
+
 func TestMinweightStorageEngineBtreePragmaState(t *testing.T) {
 	installMinweightStorageEngineForTest(t)
 
@@ -768,6 +813,38 @@ func minweightQueryInt(t *testing.T, db *sql.DB, query string) int64 {
 	var got int64
 	if err := db.QueryRow(query).Scan(&got); err != nil {
 		t.Fatalf("%s: %v", query, err)
+	}
+	return got
+}
+
+func minweightRootPages(t *testing.T, db *sql.DB, names ...string) map[string]int {
+	t.Helper()
+	wanted := map[string]bool{}
+	for _, name := range names {
+		wanted[name] = true
+	}
+	rows, err := db.Query("SELECT name, rootpage FROM sqlite_schema WHERE rootpage > 0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	got := map[string]int{}
+	for rows.Next() {
+		var name string
+		var rootpage int
+		if err := rows.Scan(&name, &rootpage); err != nil {
+			t.Fatal(err)
+		}
+		if wanted[name] {
+			got[name] = rootpage
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(wanted) {
+		t.Fatalf("rootpages = %v, missing one of %v", got, names)
 	}
 	return got
 }
