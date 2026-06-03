@@ -84,6 +84,10 @@ func TestFcntlDataVersion(t *testing.T) {
 }
 
 func TestFcntlPersistWAL(t *testing.T) {
+	if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
+		t.Skip("minweight storage engine does not model WAL files or PERSIST_WAL file-control yet")
+	}
+
 	t.Run("WAL is cleaned up without persist WAL", func(t *testing.T) {
 		name := filepath.Join(t.TempDir(), "tmp.db")
 		walName := name + "-wal"

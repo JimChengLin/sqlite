@@ -315,6 +315,10 @@ func TestIssue98(t *testing.T) {
 
 // https://gitlab.com/cznic/sqlite/issues/97
 func TestIssue97(t *testing.T) {
+	if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
+		t.Skip("minweight storage engine does not model read-only database files yet")
+	}
+
 	name := filepath.Join(t.TempDir(), "tmp.db")
 
 	db, err := sql.Open(driverName, fmt.Sprintf("file:%s", name))
@@ -2917,6 +2921,10 @@ func TestConstraintUniqueError(t *testing.T) {
 // though it returns an error; the leak of that handle (and of libc.TLS in
 // newConn) is covered by leak_test.go.
 func TestOpenV2FailureErrorMessage(t *testing.T) {
+	if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
+		t.Skip("minweight storage engine does not model invalid filesystem paths yet")
+	}
+
 	badDSN := filepath.Join(t.TempDir(), "missing", "impossible.db")
 	db, err := sql.Open(driverName, badDSN)
 	if err != nil {
@@ -3140,6 +3148,10 @@ var fs embed.FS
 var fs2 embed.FS
 
 func TestVFS(t *testing.T) {
+	if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
+		t.Skip("minweight storage engine does not model VFS-backed SQLite page files yet")
+	}
+
 	fn, f, err := vfs.New(fs)
 	if err != nil {
 		t.Fatal(err)
@@ -4087,6 +4099,10 @@ func TestIssue209(t *testing.T) {
 }
 
 func TestIsReadOnly(t *testing.T) {
+	if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
+		t.Skip("minweight storage engine does not model file chmod/read-only state yet")
+	}
+
 	const nm = "db.db"
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, nm)

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-parallel=${TEST_PARALLEL:-4}
+parallel=${TEST_PARALLEL:-8}
 : "${GOCACHE:=${TMPDIR:-/tmp}/sqlite-go-cache}"
 export GOCACHE
 

@@ -396,6 +396,11 @@ func minweightCompareIndexRows(ctx BtreeContext, keyInfo uintptr, a []byte, b []
 	if pIdxKey == 0 {
 		return 0, SQLITE_NOMEM
 	}
+	pIdxRecord := (*TUnpackedRecord)(unsafe.Pointer(pIdxKey))
+	nMem := int((*TKeyInfo)(unsafe.Pointer(keyInfo)).FnKeyField) + 1
+	clear(unsafe.Slice((*byte)(unsafe.Pointer(pIdxRecord.FaMem)), int(unsafe.Sizeof(TMem{}))*nMem))
+	pIdxRecord.FerrCode = uint8(SQLITE_OK)
+	pIdxRecord.FeqSeen = uint8(0)
 	buf := _sqlite3MallocZero(ctx.tls, uint64(len(b)+18))
 	if buf == 0 {
 		_sqlite3DbFreeNN(ctx.tls, (*TKeyInfo)(unsafe.Pointer(keyInfo)).Fdb, pIdxKey)
@@ -403,8 +408,8 @@ func minweightCompareIndexRows(ctx BtreeContext, keyInfo uintptr, a []byte, b []
 	}
 	copy(unsafe.Slice((*byte)(unsafe.Pointer(buf)), len(b)), b)
 	_sqlite3VdbeRecordUnpack(ctx.tls, int32(len(b)), buf, pIdxKey)
-	Xsqlite3_free(ctx.tls, buf)
 	cmp, rc := minweightCompareIndexKey(ctx, a, pIdxKey)
+	Xsqlite3_free(ctx.tls, buf)
 	_sqlite3DbFreeNN(ctx.tls, (*TKeyInfo)(unsafe.Pointer(keyInfo)).Fdb, pIdxKey)
 	return cmp, rc
 }
@@ -737,7 +742,7 @@ func (e *minweightStorageEngine) BtreePayloadFetch(ctx BtreeContext, pCur BtreeC
 		data = row.key
 	}
 	cur.closePayload(ctx)
-	cur.payloadBuf = _sqlite3Malloc(ctx.tls, uint64(len(data)))
+	cur.payloadBuf = _sqlite3MallocZero(ctx.tls, uint64(len(data)+18))
 	if len(data) != 0 {
 		copy(unsafe.Slice((*byte)(unsafe.Pointer(cur.payloadBuf)), len(data)), data)
 	}
@@ -752,6 +757,14 @@ func (e *minweightStorageEngine) BtreeFirst(ctx BtreeContext, pCur BtreeCursorHa
 		return minweightSQLiteError(err)
 	}
 	cur.rows = rows
+	if !cur.intKey {
+		keyInfo := (*BtCursor)(unsafe.Pointer(pCur.ptr)).FpKeyInfo
+		if keyInfo != 0 {
+			if rc := minweightSortIndexRows(ctx, keyInfo, cur.rows); rc != SQLITE_OK {
+				return rc
+			}
+		}
+	}
 	if len(rows) == 0 {
 		cur.valid = false
 		cur.index = -1
@@ -792,6 +805,14 @@ func (e *minweightStorageEngine) BtreeLast(ctx BtreeContext, pCur BtreeCursorHan
 		return minweightSQLiteError(err)
 	}
 	cur.rows = rows
+	if !cur.intKey {
+		keyInfo := (*BtCursor)(unsafe.Pointer(pCur.ptr)).FpKeyInfo
+		if keyInfo != 0 {
+			if rc := minweightSortIndexRows(ctx, keyInfo, cur.rows); rc != SQLITE_OK {
+				return rc
+			}
+		}
+	}
 	if len(rows) == 0 {
 		cur.valid = false
 		cur.index = -1

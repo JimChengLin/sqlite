@@ -8,15 +8,17 @@ package sqlite_test
 
 import (
 	"database/sql"
+	"os"
+	"reflect"
 	"sort"
+	"strconv"
 	"testing"
 
 	sqlite "modernc.org/sqlite"
 )
 
 func TestMinweightStorageEngineSimpleSPJ(t *testing.T) {
-	sqlite.SetStorageEngine(sqlite.NewMinweightStorageEngine())
-	defer sqlite.SetStorageEngine(nil)
+	installMinweightStorageEngineForTest(t)
 
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -60,6 +62,180 @@ func TestMinweightStorageEngineSimpleSPJ(t *testing.T) {
 			t.Fatalf("rows = %v, want %v", got, want)
 		}
 	}
+}
+
+func TestMinweightStorageEngineUniqueTextLookup(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	execMinweightSQL(t, db, "CREATE TABLE loginst(instid INTEGER PRIMARY KEY, name VARCHAR UNIQUE)")
+	for i := 0; i < 16; i++ {
+		name := "foo" + strconv.Itoa(i)
+		if _, err := db.Exec("INSERT OR IGNORE INTO loginst(name) VALUES (?)", name); err != nil {
+			t.Fatalf("insert iteration %d: %v", i, err)
+		}
+		var id int
+		if err := db.QueryRow("SELECT instid FROM loginst WHERE name = ?", name).Scan(&id); err != nil {
+			t.Fatalf("select iteration %d: %v", i, err)
+		}
+		if id != i+1 {
+			t.Fatalf("iteration %d: id = %d, want %d", i, id, i+1)
+		}
+	}
+}
+
+func TestMinweightStorageEngineQueryRowMultiStatement(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	execMinweightSQL(t, db, "CREATE TABLE loginst(instid INTEGER PRIMARY KEY, name VARCHAR UNIQUE)")
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	for i := 0; i < 16; i++ {
+		name := "foo" + strconv.Itoa(i)
+		var id int
+		if err := tx.QueryRow("INSERT OR IGNORE INTO loginst(name) VALUES (?); SELECT instid FROM loginst WHERE name = ?", name, name).Scan(&id); err != nil {
+			t.Fatalf("iteration %d: %v", i, err)
+		}
+		if id != i+1 {
+			t.Fatalf("iteration %d: id = %d, want %d", i, id, i+1)
+		}
+	}
+}
+
+func TestMinweightStorageEngineVarcharPrimaryKey(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	execMinweightSQL(t, db, `
+		CREATE TABLE products(
+			id VARCHAR(255),
+			user_id VARCHAR(255),
+			name VARCHAR(255),
+			PRIMARY KEY(id)
+		)
+	`)
+	execMinweightSQL(t, db, `
+		INSERT INTO products(id, user_id, name) VALUES ('9be4398c-d527-4efb-93a4-fc532cbaf804', 'u1', 'a');
+		INSERT INTO products(id, user_id, name) VALUES ('759f10bd-9e1d-4ec7-b764-0868758d7b85', 'u1', 'b')
+	`)
+
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM products WHERE user_id = 'u1'").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("count = %d, want 2", count)
+	}
+}
+
+func TestMinweightStorageEngineIssue19Shape(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	execMinweightSQL(t, db, `
+		CREATE TABLE products(
+			id VARCHAR(255),
+			user_id VARCHAR(255),
+			name VARCHAR(255),
+			description VARCHAR(255),
+			created_at BIGINT,
+			credits_price BIGINT,
+			enabled BOOLEAN,
+			PRIMARY KEY(id)
+		)
+	`)
+	inserts := []string{
+		"INSERT INTO products(id, user_id, name, description, created_at, credits_price, enabled) VALUES ('9be4398c-d527-4efb-93a4-fc532cbaf804', '16935690-348b-41a6-bb20-f8bb16011015', 'dqdwqdwqdwqwqdwqd', 'qwdwqwqdwqdwqdwqd', '1577448686', '1', '0')",
+		"INSERT INTO products(id, user_id, name, description, created_at, credits_price, enabled) VALUES ('759f10bd-9e1d-4ec7-b764-0868758d7b85', '16935690-348b-41a6-bb20-f8bb16011015', 'qdqwqwdwqdwqdwqwqd', 'wqdwqdwqdwqdwqdwq', '1577448692', '1', '1')",
+		"INSERT INTO products(id, user_id, name, description, created_at, credits_price, enabled) VALUES ('512956e7-224d-4b2a-9153-b83a52c4aa38', '16935690-348b-41a6-bb20-f8bb16011015', 'qwdwqwdqwdqdwqwqd', 'wqdwdqwqdwqdwqdwqdwqdqw', '1577448699', '2', '1')",
+		"INSERT INTO products(id, user_id, name, description, created_at, credits_price, enabled) VALUES ('02cd138f-6fa6-4909-9db7-a9d0eca4a7b7', '16935690-348b-41a6-bb20-f8bb16011015', 'qdwqdwqdwqwqdwdq', 'wqddwqwqdwqdwdqwdqwq', '1577448706', '3', '1')",
+	}
+	for i, query := range inserts {
+		if _, err := db.Exec(query); err != nil {
+			t.Fatalf("insert %d: %v", i+1, err)
+		}
+	}
+
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM products WHERE user_id = ?", "16935690-348b-41a6-bb20-f8bb16011015").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 4 {
+		t.Fatalf("count = %d, want 4", count)
+	}
+}
+
+func TestMinweightStorageEngineOrderByPreservesColumns(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	execMinweightSQL(t, db, "CREATE TABLE t3(x, y)")
+	execMinweightSQL(t, db, "INSERT INTO t3 VALUES('a', 4), ('b', 5), ('c', 3), ('d', 8), ('e', 1)")
+
+	rows, err := db.Query("SELECT x, y FROM t3 ORDER BY x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	got := map[string]int64{}
+	for rows.Next() {
+		var x string
+		var y int64
+		if err := rows.Scan(&x, &y); err != nil {
+			t.Fatal(err)
+		}
+		got[x] = y
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int64{"a": 4, "b": 5, "c": 3, "d": 8, "e": 1}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("rows = %v, want %v", got, want)
+	}
+}
+
+func installMinweightStorageEngineForTest(t *testing.T) {
+	t.Helper()
+	sqlite.SetStorageEngine(sqlite.NewMinweightStorageEngine())
+	t.Cleanup(func() {
+		if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
+			sqlite.SetStorageEngine(sqlite.NewMinweightStorageEngine())
+			return
+		}
+		sqlite.SetStorageEngine(nil)
+	})
 }
 
 func execMinweightSQL(t *testing.T, db *sql.DB, query string) {

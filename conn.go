@@ -1057,6 +1057,10 @@ func (c *conn) query(ctx context.Context, query string, args []driver.NamedValue
 // database or a "TEMP" database, the serialization is the same sequence of bytes
 // which would be written to disk if that database where backed up to disk.
 func (c *conn) Serialize() (v []byte, err error) {
+	if !sqlite3.StorageEngineIsNative() {
+		return nil, fmt.Errorf("sqlite: Serialize requires SQLite page images; current storage engine does not support it")
+	}
+
 	pLen := c.tls.Alloc(8)
 	defer c.tls.Free(8)
 
@@ -1087,6 +1091,10 @@ func (c *conn) Deserialize(buf []byte) (err error) {
 	if bufLen == 0 {
 		return fmt.Errorf("sqlite: empty buffer passed to Deserialize")
 	}
+	if !sqlite3.StorageEngineIsNative() {
+		return fmt.Errorf("sqlite: Deserialize requires SQLite page images; current storage engine does not support it")
+	}
+
 	pBuf := sqlite3.Xsqlite3_malloc64(c.tls, uint64(bufLen))
 	if pBuf == 0 {
 		return fmt.Errorf("sqlite: cannot allocate %d bytes for deserialize", bufLen)

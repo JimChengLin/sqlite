@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +18,10 @@ import (
 //
 // Run with -tags memory.counters to enable allocation tracking.
 func TestOpenV2FailureResourceLeak(t *testing.T) {
+	if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
+		t.Skip("minweight storage engine does not model invalid filesystem paths yet")
+	}
+
 	// Use a path that will reliably fail to open: a non-existent directory.
 	// SQLITE_OPEN_CREATE can create the file, but not intermediate dirs.
 	badDSN := filepath.Join(t.TempDir(), "missing", "impossible.db")
