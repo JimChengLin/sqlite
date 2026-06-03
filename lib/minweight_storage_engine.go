@@ -59,6 +59,8 @@ type minweightDatabase struct {
 	maxPageCount  uint32
 	secureDelete  int32
 	autoVacuum    int32
+	cacheSize     int32
+	spillSize     int32
 	readers       map[*minweightBtree]bool
 	writer        *minweightBtree
 	sharedRefs    int32
@@ -187,6 +189,28 @@ func minweightValidPageSize(pageSize int32) bool {
 	return pageSize >= 512 && pageSize <= SQLITE_MAX_PAGE_SIZE && pageSize&(pageSize-1) == 0
 }
 
+func minweightCachePages(pageSize int32, cacheSize int32) int32 {
+	if cacheSize >= 0 {
+		return cacheSize
+	}
+	n := int64(-1024) * int64(cacheSize) / int64(pageSize)
+	if n > 1000000000 {
+		n = 1000000000
+	}
+	return int32(n)
+}
+
+func minweightEffectiveSpillSize(pageSize int32, cacheSize int32, spillSize int32) int32 {
+	if spillSize < 0 {
+		spillSize = int32(int64(-1024) * int64(spillSize) / int64(pageSize))
+	}
+	cachePages := minweightCachePages(pageSize, cacheSize)
+	if cachePages > spillSize {
+		return cachePages
+	}
+	return spillSize
+}
+
 func minweightNewDatabase() *minweightDatabase {
 	return &minweightDatabase{
 		store:        minweight.New(),
@@ -194,6 +218,8 @@ func minweightNewDatabase() *minweightDatabase {
 		next:         1,
 		pageSize:     SQLITE_DEFAULT_PAGE_SIZE,
 		maxPageCount: SQLITE_MAX_PAGE_COUNT,
+		cacheSize:    SQLITE_DEFAULT_CACHE_SIZE,
+		spillSize:    1,
 		readers:      map[*minweightBtree]bool{},
 		tableLocks:   map[uint32]map[*minweightBtree]uint8{},
 	}
@@ -1189,10 +1215,21 @@ func (e *minweightStorageEngine) FileControlPersistWAL(ctx BtreeContext, db SQLi
 }
 
 func (e *minweightStorageEngine) BtreeSetCacheSize(ctx BtreeContext, p BtreeHandle, mxPage int32) (r int32) {
+	bt := e.btree(p)
+	bt.mu.Lock()
+	bt.cacheSize = mxPage
+	bt.mu.Unlock()
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeSetSpillSize(ctx BtreeContext, p BtreeHandle, mxPage int32) (r int32) {
-	return mxPage
+	bt := e.btree(p)
+	bt.mu.Lock()
+	if mxPage != 0 {
+		bt.spillSize = mxPage
+	}
+	spillSize := minweightEffectiveSpillSize(bt.pageSize, bt.cacheSize, bt.spillSize)
+	bt.mu.Unlock()
+	return spillSize
 }
 func (e *minweightStorageEngine) BtreeSetPagerFlags(ctx BtreeContext, p BtreeHandle, pgFlags uint32) (r int32) {
 	return SQLITE_OK

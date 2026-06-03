@@ -43,6 +43,7 @@ Last updated: 2026-06-04.
 - Matched `BtreeCheckpoint` transaction locking: minweight now returns `SQLITE_LOCKED` when checkpoint is requested while the logical btree has an open transaction, while keeping logical WAL counters at zero.
 - Matched cursor hint flag storage for minweight `BtreeCursorHintFlags`/`BtreeCursorHasHint`, including replacing old hints and mirroring SQLite's raw `BtCursor.Fhints` byte.
 - Matched raw cursor pin flags for minweight `BtreeCursorPin`/`BtreeCursorUnpin`: pinning toggles only `BTCF_Pinned` and preserves other `BtCursor.FcurFlags` bits like native btree.
+- Matched minweight `PRAGMA cache_size`/`cache_spill` visible state by tracking `BtreeSetCacheSize` and returning native-style effective values from `BtreeSetSpillSize`.
 
 ## Focused Test Policy
 

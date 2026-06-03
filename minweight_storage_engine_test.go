@@ -473,6 +473,37 @@ func TestMinweightStorageEngineBtreePragmaState(t *testing.T) {
 		t.Fatalf("max_page_count = %d, want 12345", got)
 	}
 
+	if got := minweightQueryInt(t, db, "PRAGMA cache_size"); got != -2000 {
+		t.Fatalf("default cache_size = %d, want -2000", got)
+	}
+	execMinweightSQL(t, db, "PRAGMA cache_size = 10")
+	if got := minweightQueryInt(t, db, "PRAGMA cache_size"); got != 10 {
+		t.Fatalf("cache_size = %d, want 10", got)
+	}
+	if got := minweightQueryInt(t, db, "PRAGMA cache_spill"); got != 10 {
+		t.Fatalf("default effective cache_spill = %d, want 10", got)
+	}
+	execMinweightSQL(t, db, "PRAGMA cache_spill = 20")
+	if got := minweightQueryInt(t, db, "PRAGMA cache_spill"); got != 20 {
+		t.Fatalf("cache_spill = %d, want 20", got)
+	}
+	execMinweightSQL(t, db, "PRAGMA cache_spill = 5")
+	if got := minweightQueryInt(t, db, "PRAGMA cache_spill"); got != 10 {
+		t.Fatalf("cache_spill below cache_size = %d, want 10", got)
+	}
+	execMinweightSQL(t, db, "PRAGMA cache_spill = OFF")
+	if got := minweightQueryInt(t, db, "PRAGMA cache_spill"); got != 0 {
+		t.Fatalf("cache_spill off = %d, want 0", got)
+	}
+	execMinweightSQL(t, db, "PRAGMA cache_spill = ON")
+	if got := minweightQueryInt(t, db, "PRAGMA cache_spill"); got != 10 {
+		t.Fatalf("cache_spill on = %d, want 10", got)
+	}
+	execMinweightSQL(t, db, "PRAGMA cache_size = 40")
+	if got := minweightQueryInt(t, db, "PRAGMA cache_spill"); got != 40 {
+		t.Fatalf("cache_spill after cache_size growth = %d, want 40", got)
+	}
+
 	if got := minweightQueryInt(t, db, "PRAGMA auto_vacuum"); got != 0 {
 		t.Fatalf("default auto_vacuum = %d, want 0", got)
 	}
