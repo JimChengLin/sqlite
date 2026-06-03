@@ -403,6 +403,33 @@ func TestMinweightCheckpointLockedDuringTransaction(t *testing.T) {
 	}
 }
 
+func TestMinweightCursorHintFlags(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	cursor := h.cursor(t, false)
+
+	h.engine.BtreeCursorHintFlags(h.ctx, cursor, BTREE_SEEK_EQ)
+	if got := h.engine.BtreeCursorHasHint(h.ctx, cursor, BTREE_SEEK_EQ); got != 1 {
+		t.Fatalf("BtreeCursorHasHint(BTREE_SEEK_EQ) = %d, want 1", got)
+	}
+	if got := h.engine.BtreeCursorHasHint(h.ctx, cursor, BTREE_BULKLOAD); got != 0 {
+		t.Fatalf("BtreeCursorHasHint(BTREE_BULKLOAD) = %d, want 0", got)
+	}
+	if got := (*BtCursor)(unsafe.Pointer(cursor.ptr)).Fhints; got != BTREE_SEEK_EQ {
+		t.Fatalf("raw cursor hints = %d, want %d", got, BTREE_SEEK_EQ)
+	}
+
+	h.engine.BtreeCursorHintFlags(h.ctx, cursor, BTREE_BULKLOAD)
+	if got := h.engine.BtreeCursorHasHint(h.ctx, cursor, BTREE_SEEK_EQ); got != 0 {
+		t.Fatalf("BtreeCursorHasHint(BTREE_SEEK_EQ after reset) = %d, want 0", got)
+	}
+	if got := h.engine.BtreeCursorHasHint(h.ctx, cursor, BTREE_BULKLOAD); got != 1 {
+		t.Fatalf("BtreeCursorHasHint(BTREE_BULKLOAD after reset) = %d, want 1", got)
+	}
+	if got := (*BtCursor)(unsafe.Pointer(cursor.ptr)).Fhints; got != BTREE_BULKLOAD {
+		t.Fatalf("raw cursor hints after reset = %d, want %d", got, BTREE_BULKLOAD)
+	}
+}
+
 func TestMinweightIncrblobCursorInvalidatedByReplace(t *testing.T) {
 	h := newMinweightBtreeTestHarness(t)
 	h.putRow(t, 1, []byte("abc"))

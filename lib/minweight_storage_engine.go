@@ -1030,6 +1030,7 @@ func (e *minweightStorageEngine) BtreeCursorRestore(ctx BtreeContext, pCur Btree
 }
 
 func (e *minweightStorageEngine) BtreeCursorHintFlags(ctx BtreeContext, pCur BtreeCursorHandle, x uint32) {
+	(*BtCursor)(unsafe.Pointer(pCur.ptr)).Fhints = uint8(x)
 }
 
 func (e *minweightStorageEngine) BtreeLastPage(ctx BtreeContext, p BtreeHandle) (r uint32) {
@@ -2227,6 +2228,9 @@ func (e *minweightStorageEngine) BtreeSetVersion(ctx BtreeContext, pBtree BtreeH
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeCursorHasHint(ctx BtreeContext, pCsr BtreeCursorHandle, mask uint32) (r int32) {
+	if uint32((*BtCursor)(unsafe.Pointer(pCsr.ptr)).Fhints)&mask != 0 {
+		return 1
+	}
 	return 0
 }
 func (e *minweightStorageEngine) BtreeIsReadonly(ctx BtreeContext, p BtreeHandle) (r int32) {
