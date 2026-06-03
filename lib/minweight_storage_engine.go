@@ -7,7 +7,9 @@
 package sqlite3
 
 import (
+	"bytes"
 	"encoding/binary"
+	"fmt"
 	"sort"
 	"sync"
 	"unsafe"
@@ -25,6 +27,8 @@ const (
 func NewMinweightStorageEngine() StorageEngine {
 	return &minweightStorageEngine{
 		btrees:  map[uintptr]*minweightBtree{},
+		aliases: map[uintptr]uintptr{},
+		dbs:     map[string]*minweightDatabase{},
 		cursors: map[uintptr]*minweightCursor{},
 		next:    1,
 	}
@@ -34,21 +38,39 @@ type minweightStorageEngine struct {
 	mu      sync.Mutex
 	next    uintptr
 	btrees  map[uintptr]*minweightBtree
+	aliases map[uintptr]uintptr
+	dbs     map[string]*minweightDatabase
 	cursors map[uintptr]*minweightCursor
 }
 
-type minweightBtree struct {
+type minweightDatabase struct {
+	mu      sync.Mutex
 	store   *minweight.Store
 	meta    [SQLITE_N_BTREE_META]uint32
 	tables  map[uint32]minweightTable
 	next    uint32
-	pager   uintptr
-	schema  uintptr
 	dataVer uint32
+	readers map[*minweightBtree]bool
+	writer  *minweightBtree
+}
+
+type minweightBtree struct {
+	*minweightDatabase
+	pager       uintptr
+	file        uintptr
+	journal     uintptr
+	filename    uintptr
+	journalName uintptr
+	schema      uintptr
+	db          uintptr
+	txnState    int32
 }
 
 type minweightTable struct {
-	intKey bool
+	intKey   bool
+	rowCount int64
+	minRowid int64
+	maxRowid int64
 }
 
 type minweightCursor struct {
@@ -72,12 +94,22 @@ func (e *minweightStorageEngine) nextToken() uintptr {
 	return e.next
 }
 
+func (e *minweightStorageEngine) btreeTokenLocked(ptr uintptr) uintptr {
+	if e.btrees[ptr] != nil {
+		return ptr
+	}
+	if token := e.aliases[ptr]; token != 0 {
+		return token
+	}
+	return ptr
+}
+
 func (e *minweightStorageEngine) btree(p BtreeHandle) *minweightBtree {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	bt := e.btrees[p.ptr]
+	bt := e.btrees[e.btreeTokenLocked(p.ptr)]
 	if bt == nil {
-		panic("sqlite minweight storage engine: unknown btree handle")
+		panic(fmt.Sprintf("sqlite minweight storage engine: unknown btree handle %#x", p.ptr))
 	}
 	return bt
 }
@@ -97,6 +129,39 @@ func minweightSQLiteError(err error) int32 {
 		return SQLITE_OK
 	}
 	return SQLITE_ERROR
+}
+
+func minweightNewDatabase() *minweightDatabase {
+	return &minweightDatabase{
+		store:   minweight.New(),
+		tables:  map[uint32]minweightTable{1: {intKey: true}},
+		next:    1,
+		readers: map[*minweightBtree]bool{},
+	}
+}
+
+func minweightDatabaseKey(zFilename BtreeCStringHandle) string {
+	if zFilename.IsNil() {
+		return ""
+	}
+	name := zFilename.String()
+	switch name {
+	case "", ":memory:", "file::memory:":
+		return ""
+	default:
+		return name
+	}
+}
+
+func minweightAllocCString(ctx BtreeContext, s string) uintptr {
+	p := _sqlite3Malloc(ctx.tls, uint64(len(s)+1))
+	if p == 0 {
+		return 0
+	}
+	if len(s) != 0 {
+		copy(unsafe.Slice((*byte)(unsafe.Pointer(p)), len(s)+1), s)
+	}
+	return p
 }
 
 func minweightTableKey(root uint32, rowid int64) []byte {
@@ -126,17 +191,6 @@ func minweightRootPrefix(root uint32, intKey bool) []byte {
 	return prefix
 }
 
-func minweightPrefixUpper(prefix []byte) []byte {
-	upper := append([]byte(nil), prefix...)
-	for i := len(upper) - 1; i >= 0; i-- {
-		if upper[i] != 0xff {
-			upper[i]++
-			return upper[:i+1]
-		}
-	}
-	return nil
-}
-
 func minweightDecodeRow(item minweight.Item, intKey bool) minweightRow {
 	row := minweightRow{payload: append([]byte(nil), item.Value...)}
 	if intKey {
@@ -150,9 +204,11 @@ func minweightDecodeRow(item minweight.Item, intKey bool) minweightRow {
 
 func (bt *minweightBtree) loadRows(root uint32, intKey bool) ([]minweightRow, error) {
 	prefix := minweightRootPrefix(root, intKey)
-	upper := minweightPrefixUpper(prefix)
 	var rows []minweightRow
-	err := bt.store.ScanRange(prefix, upper, func(item minweight.Item) bool {
+	err := bt.store.Scan(func(item minweight.Item) bool {
+		if !bytes.HasPrefix(item.Key, prefix) {
+			return true
+		}
 		rows = append(rows, minweightDecodeRow(item, intKey))
 		return true
 	})
@@ -176,6 +232,126 @@ func (bt *minweightBtree) clearRoot(root uint32, intKey bool) (int, error) {
 		}
 	}
 	return len(rows), nil
+}
+
+func (bt *minweightBtree) noteInsert(root uint32, rowid int64, existed bool) {
+	table := bt.tables[root]
+	if !existed {
+		table.rowCount++
+	}
+	if table.intKey && !existed {
+		if table.rowCount == 1 {
+			table.minRowid = rowid
+			table.maxRowid = rowid
+		} else {
+			if rowid < table.minRowid {
+				table.minRowid = rowid
+			}
+			if rowid > table.maxRowid {
+				table.maxRowid = rowid
+			}
+		}
+	}
+	bt.tables[root] = table
+}
+
+func (bt *minweightBtree) resetTableStats(root uint32) {
+	table := bt.tables[root]
+	table.rowCount = 0
+	table.minRowid = 0
+	table.maxRowid = 0
+	bt.tables[root] = table
+}
+
+func (bt *minweightBtree) recomputeIntKeyStats(root uint32) error {
+	rows, err := bt.loadRows(root, true)
+	if err != nil {
+		return err
+	}
+	table := bt.tables[root]
+	table.rowCount = int64(len(rows))
+	if len(rows) == 0 {
+		table.minRowid = 0
+		table.maxRowid = 0
+	} else {
+		table.minRowid = rows[0].rowid
+		table.maxRowid = rows[len(rows)-1].rowid
+	}
+	bt.tables[root] = table
+	return nil
+}
+
+func (bt *minweightBtree) noteDelete(root uint32, row minweightRow, deleted bool, intKey bool) error {
+	if !deleted {
+		return nil
+	}
+	table := bt.tables[root]
+	if table.rowCount > 0 {
+		table.rowCount--
+	}
+	bt.tables[root] = table
+	if !intKey {
+		return nil
+	}
+	if table.rowCount == 0 {
+		bt.resetTableStats(root)
+		return nil
+	}
+	if row.rowid != table.minRowid && row.rowid != table.maxRowid {
+		return nil
+	}
+	return bt.recomputeIntKeyStats(root)
+}
+
+func (bt *minweightBtree) beginTrans(wrflag int32) {
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	if wrflag != 0 {
+		delete(bt.readers, bt)
+		bt.writer = bt
+		bt.txnState = SQLITE_TXN_WRITE
+		return
+	}
+	if bt.db != 0 && (*Tsqlite3)(unsafe.Pointer(bt.db)).FautoCommit == 0 && bt.txnState == SQLITE_TXN_NONE {
+		bt.readers[bt] = true
+		bt.txnState = SQLITE_TXN_READ
+	}
+}
+
+func (bt *minweightBtree) releaseTrans() {
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	delete(bt.readers, bt)
+	if bt.writer == bt {
+		bt.writer = nil
+	}
+	bt.txnState = SQLITE_TXN_NONE
+}
+
+func (bt *minweightBtree) commitPhaseOne(ctx BtreeContext) int32 {
+	for {
+		bt.mu.Lock()
+		busy := false
+		if bt.txnState == SQLITE_TXN_WRITE {
+			for reader := range bt.readers {
+				if reader != bt {
+					busy = true
+					break
+				}
+			}
+		}
+		bt.mu.Unlock()
+		if !busy {
+			return SQLITE_OK
+		}
+		if bt.db == 0 {
+			return SQLITE_BUSY
+		}
+		pBusy := bt.db + unsafe.Offsetof(Tsqlite3{}.FbusyHandler)
+		if _sqlite3InvokeBusyHandler(ctx.tls, pBusy) == 0 {
+			return SQLITE_BUSY
+		}
+	}
 }
 
 func minweightWriteResult(pRes BtreeMemoryHandle, v int32) {
@@ -280,16 +456,54 @@ func (e *minweightStorageEngine) BtreeLastPage(ctx BtreeContext, p BtreeHandle) 
 
 func (e *minweightStorageEngine) BtreeOpen(ctx BtreeContext, pVfs BtreeVFSHandle, zFilename BtreeCStringHandle, db SQLiteHandle, ppBtree BtreeMemoryHandle, flags int32, vfsFlags int32) (r int32) {
 	pager := _sqlite3MallocZero(ctx.tls, uint64(unsafe.Sizeof(Pager{})))
+	file := _sqlite3MallocZero(ctx.tls, uint64(unsafe.Sizeof(Tsqlite3_file{})))
+	journal := _sqlite3MallocZero(ctx.tls, uint64(unsafe.Sizeof(Tsqlite3_file{})))
 	(*Pager)(unsafe.Pointer(pager)).FpageSize = 4096
+	(*Pager)(unsafe.Pointer(pager)).Ffd = file
+	(*Pager)(unsafe.Pointer(pager)).Fjfd = journal
+	(*Pager)(unsafe.Pointer(pager)).FnoLock = 1
+	database := minweightNewDatabase()
+	key := minweightDatabaseKey(zFilename)
+	var filename uintptr
+	var journalName uintptr
+	if key != "" {
+		filename = minweightAllocCString(ctx, key)
+		journalName = minweightAllocCString(ctx, key+"-journal")
+		if filename == 0 || journalName == 0 {
+			if filename != 0 {
+				Xsqlite3_free(ctx.tls, filename)
+			}
+			if journalName != 0 {
+				Xsqlite3_free(ctx.tls, journalName)
+			}
+			Xsqlite3_free(ctx.tls, pager)
+			Xsqlite3_free(ctx.tls, file)
+			Xsqlite3_free(ctx.tls, journal)
+			return SQLITE_NOMEM
+		}
+	}
 	bt := &minweightBtree{
-		pager:  pager,
-		store:  minweight.New(),
-		tables: map[uint32]minweightTable{1: {intKey: true}},
-		next:   1,
+		minweightDatabase: database,
+		pager:             pager,
+		file:              file,
+		journal:           journal,
+		filename:          filename,
+		journalName:       journalName,
+		db:                db.ptr,
 	}
 	e.mu.Lock()
+	if key != "" {
+		if existing := e.dbs[key]; existing != nil {
+			bt.minweightDatabase = existing
+		} else {
+			e.dbs[key] = database
+		}
+	}
 	token := e.nextToken()
 	e.btrees[token] = bt
+	if db.ptr != 0 && e.aliases[db.ptr] == 0 {
+		e.aliases[db.ptr] = token
+	}
 	e.mu.Unlock()
 	ppBtree.PutBtreeToken(BtreeToken(token))
 	return SQLITE_OK
@@ -297,14 +511,35 @@ func (e *minweightStorageEngine) BtreeOpen(ctx BtreeContext, pVfs BtreeVFSHandle
 
 func (e *minweightStorageEngine) BtreeClose(ctx BtreeContext, p BtreeHandle) (r int32) {
 	e.mu.Lock()
-	bt := e.btrees[p.ptr]
-	delete(e.btrees, p.ptr)
+	token := e.btreeTokenLocked(p.ptr)
+	bt := e.btrees[token]
+	delete(e.btrees, token)
+	for alias, target := range e.aliases {
+		if alias == p.ptr || target == token {
+			delete(e.aliases, alias)
+		}
+	}
 	e.mu.Unlock()
 	if bt != nil && bt.schema != 0 {
 		Xsqlite3_free(ctx.tls, bt.schema)
 	}
 	if bt != nil && bt.pager != 0 {
 		Xsqlite3_free(ctx.tls, bt.pager)
+	}
+	if bt != nil && bt.file != 0 {
+		Xsqlite3_free(ctx.tls, bt.file)
+	}
+	if bt != nil && bt.journal != 0 {
+		Xsqlite3_free(ctx.tls, bt.journal)
+	}
+	if bt != nil && bt.filename != 0 {
+		Xsqlite3_free(ctx.tls, bt.filename)
+	}
+	if bt != nil && bt.journalName != 0 {
+		Xsqlite3_free(ctx.tls, bt.journalName)
+	}
+	if bt != nil {
+		bt.releaseTrans()
 	}
 	return SQLITE_OK
 }
@@ -353,27 +588,32 @@ func (e *minweightStorageEngine) BtreeNewDb(ctx BtreeContext, p BtreeHandle) (r 
 }
 
 func (e *minweightStorageEngine) BtreeBeginTrans(ctx BtreeContext, p BtreeHandle, wrflag int32, pSchemaVersion BtreeMemoryHandle) (r int32) {
+	bt := e.btree(p)
 	if !pSchemaVersion.IsNil() {
-		pSchemaVersion.PutUint32(e.btree(p).meta[BTREE_SCHEMA_VERSION])
+		pSchemaVersion.PutUint32(bt.meta[BTREE_SCHEMA_VERSION])
 	}
+	bt.beginTrans(wrflag)
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeIncrVacuum(ctx BtreeContext, p BtreeHandle) (r int32) {
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeCommitPhaseOne(ctx BtreeContext, p BtreeHandle, zSuperJrnl BtreeCStringHandle) (r int32) {
-	return SQLITE_OK
+	return e.btree(p).commitPhaseOne(ctx)
 }
 func (e *minweightStorageEngine) BtreeCommitPhaseTwo(ctx BtreeContext, p BtreeHandle, bCleanup int32) (r int32) {
+	e.btree(p).releaseTrans()
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeCommit(ctx BtreeContext, p BtreeHandle) (r int32) {
+	e.btree(p).releaseTrans()
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeTripAllCursors(ctx BtreeContext, pBtree BtreeHandle, errCode int32, writeOnly int32) (r int32) {
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeRollback(ctx BtreeContext, p BtreeHandle, tripCode int32, writeOnly int32) (r int32) {
+	e.btree(p).releaseTrans()
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeBeginStmt(ctx BtreeContext, p BtreeHandle, iStatement int32) (r int32) {
@@ -526,6 +766,27 @@ func (e *minweightStorageEngine) BtreeFirst(ctx BtreeContext, pCur BtreeCursorHa
 
 func (e *minweightStorageEngine) BtreeLast(ctx BtreeContext, pCur BtreeCursorHandle, pRes BtreeMemoryHandle) (r int32) {
 	cur := e.cursor(pCur)
+	table := cur.btree.tables[cur.root]
+	if cur.intKey {
+		if table.rowCount == 0 {
+			cur.valid = false
+			cur.index = -1
+			minweightWriteResult(pRes, 1)
+			return SQLITE_OK
+		}
+		payload, ok, err := cur.btree.store.Get(minweightTableKey(cur.root, table.maxRowid))
+		if err != nil {
+			return minweightSQLiteError(err)
+		}
+		if !ok {
+			return SQLITE_CORRUPT
+		}
+		cur.rows = []minweightRow{{rowid: table.maxRowid, payload: append([]byte(nil), payload...)}}
+		cur.valid = true
+		cur.index = 0
+		minweightWriteResult(pRes, 0)
+		return SQLITE_OK
+	}
 	rows, err := cur.btree.loadRows(cur.root, cur.intKey)
 	if err != nil {
 		return minweightSQLiteError(err)
@@ -611,11 +872,7 @@ func (e *minweightStorageEngine) BtreeEof(ctx BtreeContext, pCur BtreeCursorHand
 
 func (e *minweightStorageEngine) BtreeRowCountEst(ctx BtreeContext, pCur BtreeCursorHandle) (r int64) {
 	cur := e.cursor(pCur)
-	rows, err := cur.btree.loadRows(cur.root, cur.intKey)
-	if err != nil {
-		return 0
-	}
-	return int64(len(rows))
+	return cur.btree.tables[cur.root].rowCount
 }
 
 func (e *minweightStorageEngine) BtreeNext(ctx BtreeContext, pCur BtreeCursorHandle, flags int32) (r int32) {
@@ -636,6 +893,19 @@ func (e *minweightStorageEngine) BtreePrevious(ctx BtreeContext, pCur BtreeCurso
 	if !cur.valid {
 		return SQLITE_DONE
 	}
+	if cur.intKey && len(cur.rows) == 1 {
+		rowid := cur.rows[cur.index].rowid
+		rows, err := cur.btree.loadRows(cur.root, true)
+		if err != nil {
+			return minweightSQLiteError(err)
+		}
+		i := sort.Search(len(rows), func(i int) bool { return rows[i].rowid >= rowid })
+		if i >= len(rows) || rows[i].rowid != rowid {
+			return SQLITE_CORRUPT
+		}
+		cur.rows = rows
+		cur.index = i
+	}
 	cur.index--
 	if cur.index < 0 {
 		cur.valid = false
@@ -648,19 +918,26 @@ func (e *minweightStorageEngine) BtreeInsert(ctx BtreeContext, pCur BtreeCursorH
 	cur := e.cursor(pCur)
 	var key []byte
 	var payload []byte
+	var rowid int64
 	if cur.intKey {
+		rowid = pX.KeySize()
 		payload = pX.DataBytes()
 		if zeros := pX.ZeroSize(); zeros > 0 {
 			payload = append(payload, make([]byte, zeros)...)
 		}
-		key = minweightTableKey(cur.root, pX.KeySize())
+		key = minweightTableKey(cur.root, rowid)
 	} else {
 		payload = pX.KeyBytes()
 		key = minweightIndexKey(cur.root, payload)
 	}
+	_, existed, err := cur.btree.store.Get(key)
+	if err != nil {
+		return minweightSQLiteError(err)
+	}
 	if err := cur.btree.store.Put(key, payload); err != nil {
 		return minweightSQLiteError(err)
 	}
+	cur.btree.noteInsert(cur.root, rowid, existed)
 	cur.btree.dataVer++
 	return SQLITE_OK
 }
@@ -681,9 +958,15 @@ func (e *minweightStorageEngine) BtreeDelete(ctx BtreeContext, pCur BtreeCursorH
 	} else {
 		key = minweightIndexKey(cur.root, row.key)
 	}
-	_, err := cur.btree.store.Delete(key)
+	deleted, err := cur.btree.store.Delete(key)
+	if err != nil {
+		return minweightSQLiteError(err)
+	}
+	if err := cur.btree.noteDelete(cur.root, row, deleted, cur.intKey); err != nil {
+		return minweightSQLiteError(err)
+	}
 	cur.btree.dataVer++
-	return minweightSQLiteError(err)
+	return SQLITE_OK
 }
 
 func (e *minweightStorageEngine) BtreeCreateTable(ctx BtreeContext, p BtreeHandle, piTable BtreeMemoryHandle, flags int32) (r int32) {
@@ -700,6 +983,9 @@ func (e *minweightStorageEngine) BtreeClearTable(ctx BtreeContext, p BtreeHandle
 	bt := e.btree(p)
 	table := bt.tables[uint32(iTable)]
 	n, err := bt.clearRoot(uint32(iTable), table.intKey)
+	if err == nil {
+		bt.resetTableStats(uint32(iTable))
+	}
 	if !pnChange.IsNil() {
 		pnChange.PutInt32(int32(n))
 	}
@@ -710,6 +996,9 @@ func (e *minweightStorageEngine) BtreeClearTable(ctx BtreeContext, p BtreeHandle
 func (e *minweightStorageEngine) BtreeClearTableOfCursor(ctx BtreeContext, pCur BtreeCursorHandle) (r int32) {
 	cur := e.cursor(pCur)
 	_, err := cur.btree.clearRoot(cur.root, cur.intKey)
+	if err == nil {
+		cur.btree.resetTableStats(cur.root)
+	}
 	cur.btree.dataVer++
 	return minweightSQLiteError(err)
 }
@@ -752,25 +1041,26 @@ func (e *minweightStorageEngine) BtreeUpdateMeta(ctx BtreeContext, p BtreeHandle
 
 func (e *minweightStorageEngine) BtreeCount(ctx BtreeContext, db SQLiteHandle, pCur BtreeCursorHandle, pnEntry BtreeMemoryHandle) (r int32) {
 	cur := e.cursor(pCur)
-	rows, err := cur.btree.loadRows(cur.root, cur.intKey)
-	if err != nil {
-		return minweightSQLiteError(err)
-	}
-	pnEntry.PutInt64(int64(len(rows)))
+	pnEntry.PutInt64(cur.btree.tables[cur.root].rowCount)
 	return SQLITE_OK
 }
 
 func (e *minweightStorageEngine) BtreePager(ctx BtreeContext, p BtreeHandle) (r BtreePagerHandle) {
-	return btreePagerHandle(ctx.tls, e.btree(p).pager)
+	bt := e.btree(p)
+	(*Pager)(unsafe.Pointer(bt.pager)).FiDataVersion = bt.dataVer
+	return btreePagerHandle(ctx.tls, bt.pager)
 }
 func (e *minweightStorageEngine) BtreeGetFilename(ctx BtreeContext, p BtreeHandle) (r BtreeCStringHandle) {
-	return BtreeCStringHandle{}
+	return btreeCStringHandle(ctx.tls, e.btree(p).filename)
 }
 func (e *minweightStorageEngine) BtreeGetJournalname(ctx BtreeContext, p BtreeHandle) (r BtreeCStringHandle) {
-	return BtreeCStringHandle{}
+	return btreeCStringHandle(ctx.tls, e.btree(p).journalName)
 }
 func (e *minweightStorageEngine) BtreeTxnState(ctx BtreeContext, p BtreeHandle) (r int32) {
-	return 0
+	if p.IsNil() {
+		return SQLITE_TXN_NONE
+	}
+	return e.btree(p).txnState
 }
 func (e *minweightStorageEngine) BtreeCheckpoint(ctx BtreeContext, p BtreeHandle, eMode int32, pnLog BtreeMemoryHandle, pnCkpt BtreeMemoryHandle) (r int32) {
 	if !pnLog.IsNil() {
@@ -846,11 +1136,7 @@ func (e *minweightStorageEngine) BtreeSetMmapLimit(ctx BtreeContext, p BtreeHand
 
 func (e *minweightStorageEngine) BtreeIsEmpty(ctx BtreeContext, pCur BtreeCursorHandle, pRes BtreeMemoryHandle) (r int32) {
 	cur := e.cursor(pCur)
-	rows, err := cur.btree.loadRows(cur.root, cur.intKey)
-	if err != nil {
-		return minweightSQLiteError(err)
-	}
-	if len(rows) == 0 {
+	if cur.btree.tables[cur.root].rowCount == 0 {
 		pRes.PutInt32(1)
 	} else {
 		pRes.PutInt32(0)

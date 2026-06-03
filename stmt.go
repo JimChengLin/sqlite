@@ -425,6 +425,9 @@ func (s *stmt) query(ctx context.Context, args []driver.NamedValue) (r driver.Ro
 				pstmt = 0
 				return nil
 			case sqlite3.SQLITE_DONE:
+				if *(*byte)(unsafe.Pointer(psql)) != 0 {
+					return nil
+				}
 				if r == nil {
 					if r, err = newRows(s.c, pstmt, &allocs, true); err != nil {
 						return err

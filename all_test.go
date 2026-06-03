@@ -114,6 +114,17 @@ var (
 func TestMain(m *testing.M) {
 	fmt.Printf("test binary compiled for %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	flag.Parse()
+	switch v := os.Getenv("SQLITE_TEST_STORAGE_ENGINE"); v {
+	case "":
+	case "minweight":
+		engine, ok := testMinweightStorageEngine()
+		if !ok {
+			panic("SQLITE_TEST_STORAGE_ENGINE=minweight is not supported on this target")
+		}
+		SetStorageEngine(engine)
+	default:
+		panic(fmt.Sprintf("unknown SQLITE_TEST_STORAGE_ENGINE %q", v))
+	}
 	libc.MemAuditStart()
 	os.Exit(testMain(m))
 }
@@ -4474,6 +4485,10 @@ func TestExecReturningCancelDuringDrain(t *testing.T) {
 }
 
 func TestDBPageVtab(t *testing.T) {
+	if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
+		t.Skip("sqlite_dbpage exposes physical SQLite pages; minweight does not model SQLite page images yet")
+	}
+
 	// Open an in-memory database
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -4491,7 +4506,7 @@ func TestDBPageVtab(t *testing.T) {
 	}
 
 	// Query the sqlite_dbpage virtual table.
-	// If -DSQLITE_ENABLE_DBPAGE_VTAB was not enabled, this will return an error 
+	// If -DSQLITE_ENABLE_DBPAGE_VTAB was not enabled, this will return an error
 	// (e.g., "no such table: sqlite_dbpage").
 	var pgno int
 	var data []byte

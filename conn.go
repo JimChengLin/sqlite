@@ -1136,6 +1136,20 @@ func (c *conn) NewRestore(srcUri string) (*Backup, error) {
 }
 
 func (c *conn) backup(remoteConn *conn, restore bool) (_ *Backup, finalErr error) {
+	if !sqlite3.StorageEngineIsNative() {
+		srcConn := c
+		dstConn := remoteConn
+		if restore {
+			srcConn = remoteConn
+			dstConn = c
+		}
+		backup, err := newLogicalBackup(srcConn, dstConn)
+		if err != nil {
+			return nil, err
+		}
+		return &Backup{srcConn: c, dstConn: remoteConn, logical: backup}, nil
+	}
+
 	srcSchema := sqlite3.Xsqlite3_db_name(c.tls, c.db, 0)
 	if srcSchema == 0 {
 		return nil, fmt.Errorf("failed to get main source db name")

@@ -151,6 +151,13 @@ func storageEngine() StorageEngine {
 	return currentStorageEngine.Load().(storageEngineHolder).engine
 }
 
+// StorageEngineIsNative reports whether calls are currently dispatched to the
+// generated SQLite btree implementation.
+func StorageEngineIsNative() bool {
+	_, ok := storageEngine().(nativeBtreeStorageEngine)
+	return ok
+}
+
 // SetStorageEngine sets the btree storage engine. Passing nil restores the generated SQLite btree implementation.
 func SetStorageEngine(engine StorageEngine) {
 	if engine == nil {
