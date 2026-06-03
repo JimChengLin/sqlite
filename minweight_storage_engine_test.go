@@ -364,6 +364,122 @@ func TestMinweightStorageEngineLogicalSerializeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMinweightStorageEngineTransactionRollbackRestoresRows(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	execMinweightSQL(t, db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT UNIQUE)")
+	execMinweightSQL(t, db, "INSERT INTO t(id, v) VALUES (1, 'a'), (2, 'b')")
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("INSERT INTO t(id, v) VALUES (3, 'c')"); err != nil {
+		t.Fatalf("insert in tx: %v", err)
+	}
+	if _, err := tx.Exec("UPDATE t SET v = 'aa' WHERE id = 1"); err != nil {
+		t.Fatalf("update in tx: %v", err)
+	}
+	if _, err := tx.Exec("DELETE FROM t WHERE id = 2"); err != nil {
+		t.Fatalf("delete in tx: %v", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+
+	want := []string{"1:a", "2:b"}
+	if got := minweightRowStrings(t, db); !reflect.DeepEqual(got, want) {
+		t.Fatalf("rows = %v, want %v", got, want)
+	}
+
+	var id int
+	if err := db.QueryRow("SELECT id FROM t WHERE v = 'a'").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if id != 1 {
+		t.Fatalf("id for v=a = %d, want 1", id)
+	}
+}
+
+func TestMinweightStorageEngineSavepointRollbackRestoresRows(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	execMinweightSQL(t, db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT UNIQUE)")
+	execMinweightSQL(t, db, "INSERT INTO t(id, v) VALUES (1, 'a'), (2, 'b')")
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("INSERT INTO t(id, v) VALUES (3, 'keep')"); err != nil {
+		t.Fatalf("insert before savepoint: %v", err)
+	}
+	if _, err := tx.Exec("SAVEPOINT sp"); err != nil {
+		t.Fatalf("savepoint: %v", err)
+	}
+	if _, err := tx.Exec("UPDATE t SET v = 'changed' WHERE id = 1"); err != nil {
+		t.Fatalf("update after savepoint: %v", err)
+	}
+	if _, err := tx.Exec("DELETE FROM t WHERE id = 2"); err != nil {
+		t.Fatalf("delete after savepoint: %v", err)
+	}
+	if _, err := tx.Exec("INSERT INTO t(id, v) VALUES (4, 'drop')"); err != nil {
+		t.Fatalf("insert after savepoint: %v", err)
+	}
+	if _, err := tx.Exec("ROLLBACK TO sp"); err != nil {
+		t.Fatalf("rollback to savepoint: %v", err)
+	}
+	if _, err := tx.Exec("RELEASE sp"); err != nil {
+		t.Fatalf("release savepoint: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	want := []string{"1:a", "2:b", "3:keep"}
+	if got := minweightRowStrings(t, db); !reflect.DeepEqual(got, want) {
+		t.Fatalf("rows = %v, want %v", got, want)
+	}
+}
+
+func TestMinweightStorageEngineStatementRollbackRestoresRows(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	execMinweightSQL(t, db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT UNIQUE)")
+	execMinweightSQL(t, db, "INSERT INTO t(v) VALUES ('a')")
+
+	if _, err := db.Exec("INSERT INTO t(v) VALUES ('b'), ('a'), ('c')"); err == nil {
+		t.Fatal("duplicate insert succeeded, want constraint error")
+	}
+
+	want := []string{"1:a"}
+	if got := minweightRowStrings(t, db); !reflect.DeepEqual(got, want) {
+		t.Fatalf("rows = %v, want %v", got, want)
+	}
+
+	if _, err := db.Exec("INSERT INTO t(v) VALUES ('b')"); err != nil {
+		t.Fatalf("insert after statement rollback: %v", err)
+	}
+}
+
 func installMinweightStorageEngineForTest(t *testing.T) {
 	t.Helper()
 	sqlite.SetStorageEngine(sqlite.NewMinweightStorageEngine())
@@ -381,4 +497,27 @@ func execMinweightSQL(t *testing.T, db *sql.DB, query string) {
 	if _, err := db.Exec(query); err != nil {
 		t.Fatalf("%s: %v", query, err)
 	}
+}
+
+func minweightRowStrings(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	rows, err := db.Query("SELECT id, v FROM t ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var id int
+		var v string
+		if err := rows.Scan(&id, &v); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, strconv.Itoa(id)+":"+v)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return got
 }

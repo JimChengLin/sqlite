@@ -68,6 +68,8 @@ type minweightBtree struct {
 	readOnly    bool
 	persistWAL  bool
 	walActive   bool
+	txSnapshot  *minweightSnapshot
+	savepoints  []minweightSnapshot
 }
 
 type minweightTable struct {
@@ -94,6 +96,19 @@ type minweightRow struct {
 	rowid   int64
 	key     []byte
 	payload []byte
+}
+
+type minweightSnapshot struct {
+	items   []minweightSnapshotItem
+	meta    [SQLITE_N_BTREE_META]uint32
+	tables  map[uint32]minweightTable
+	next    uint32
+	dataVer uint32
+}
+
+type minweightSnapshotItem struct {
+	key   []byte
+	value []byte
 }
 
 func (e *minweightStorageEngine) nextToken() uintptr {
@@ -234,6 +249,52 @@ func minweightDecodeRow(item minweight.Item, intKey bool) minweightRow {
 	return row
 }
 
+func minweightCloneTables(src map[uint32]minweightTable) map[uint32]minweightTable {
+	dst := make(map[uint32]minweightTable, len(src))
+	for root, table := range src {
+		dst[root] = table
+	}
+	return dst
+}
+
+func (bt *minweightBtree) snapshot() (*minweightSnapshot, error) {
+	s := &minweightSnapshot{}
+	if err := bt.store.Scan(func(item minweight.Item) bool {
+		s.items = append(s.items, minweightSnapshotItem{
+			key:   append([]byte(nil), item.Key...),
+			value: append([]byte(nil), item.Value...),
+		})
+		return true
+	}); err != nil {
+		return nil, err
+	}
+	bt.mu.Lock()
+	s.meta = bt.meta
+	s.tables = minweightCloneTables(bt.tables)
+	s.next = bt.next
+	s.dataVer = bt.dataVer
+	bt.mu.Unlock()
+	return s, nil
+}
+
+func (bt *minweightBtree) restoreSnapshot(s minweightSnapshot) error {
+	store := minweight.New()
+	for _, item := range s.items {
+		if err := store.Put(item.key, item.value); err != nil {
+			return err
+		}
+	}
+	bt.mu.Lock()
+	dataVer := bt.dataVer + 1
+	bt.store = store
+	bt.meta = s.meta
+	bt.tables = minweightCloneTables(s.tables)
+	bt.next = s.next
+	bt.dataVer = dataVer
+	bt.mu.Unlock()
+	return nil
+}
+
 func (bt *minweightBtree) loadRows(root uint32, intKey bool) ([]minweightRow, error) {
 	prefix := minweightRootPrefix(root, intKey)
 	var rows []minweightRow
@@ -348,6 +409,55 @@ func (bt *minweightBtree) noteDelete(root uint32, row minweightRow, deleted bool
 	return bt.recomputeIntKeyStats(root)
 }
 
+func (bt *minweightBtree) ensureTransactionSnapshot() error {
+	bt.mu.Lock()
+	needsSnapshot := bt.txSnapshot == nil
+	bt.mu.Unlock()
+	if !needsSnapshot {
+		return nil
+	}
+	s, err := bt.snapshot()
+	if err != nil {
+		return err
+	}
+	bt.mu.Lock()
+	if bt.txSnapshot == nil {
+		bt.txSnapshot = s
+	}
+	bt.mu.Unlock()
+	return nil
+}
+
+func (bt *minweightBtree) ensureSavepoints(n int32) error {
+	if n <= 0 {
+		return nil
+	}
+	for {
+		bt.mu.Lock()
+		needsSnapshot := len(bt.savepoints) < int(n)
+		bt.mu.Unlock()
+		if !needsSnapshot {
+			return nil
+		}
+		s, err := bt.snapshot()
+		if err != nil {
+			return err
+		}
+		bt.mu.Lock()
+		if len(bt.savepoints) < int(n) {
+			bt.savepoints = append(bt.savepoints, *s)
+		}
+		bt.mu.Unlock()
+	}
+}
+
+func (bt *minweightBtree) sqliteSavepointCount() int32 {
+	if bt.db == 0 {
+		return 0
+	}
+	return (*Tsqlite3)(unsafe.Pointer(bt.db)).FnSavepoint
+}
+
 func (bt *minweightBtree) beginTrans(wrflag int32) {
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
@@ -427,6 +537,8 @@ func (bt *minweightBtree) releaseTrans() {
 		bt.writer = nil
 	}
 	bt.txnState = SQLITE_TXN_NONE
+	bt.txSnapshot = nil
+	bt.savepoints = nil
 }
 
 func (bt *minweightBtree) commitPhaseOne(ctx BtreeContext) int32 {
@@ -821,6 +933,12 @@ func (e *minweightStorageEngine) BtreeBeginTrans(ctx BtreeContext, p BtreeHandle
 		if rc := bt.ensureWritable(); rc != SQLITE_OK {
 			return rc
 		}
+		if err := bt.ensureTransactionSnapshot(); err != nil {
+			return minweightSQLiteError(err)
+		}
+		if err := bt.ensureSavepoints(bt.sqliteSavepointCount()); err != nil {
+			return minweightSQLiteError(err)
+		}
 		if rc := bt.createWALPlaceholder(); rc != SQLITE_OK {
 			return rc
 		}
@@ -846,13 +964,73 @@ func (e *minweightStorageEngine) BtreeTripAllCursors(ctx BtreeContext, pBtree Bt
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeRollback(ctx BtreeContext, p BtreeHandle, tripCode int32, writeOnly int32) (r int32) {
-	e.btree(p).releaseTrans()
+	if p.IsNil() {
+		return SQLITE_OK
+	}
+	bt := e.btree(p)
+	bt.mu.Lock()
+	s := bt.txSnapshot
+	bt.mu.Unlock()
+	if s != nil {
+		if err := bt.restoreSnapshot(*s); err != nil {
+			return minweightSQLiteError(err)
+		}
+	}
+	bt.releaseTrans()
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeBeginStmt(ctx BtreeContext, p BtreeHandle, iStatement int32) (r int32) {
+	if p.IsNil() {
+		return SQLITE_OK
+	}
+	bt := e.btree(p)
+	if err := bt.ensureTransactionSnapshot(); err != nil {
+		return minweightSQLiteError(err)
+	}
+	if err := bt.ensureSavepoints(iStatement); err != nil {
+		return minweightSQLiteError(err)
+	}
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeSavepoint(ctx BtreeContext, p BtreeHandle, op int32, iSavepoint int32) (r int32) {
+	if p.IsNil() {
+		return SQLITE_OK
+	}
+	bt := e.btree(p)
+	if op != SAVEPOINT_ROLLBACK && op != SAVEPOINT_RELEASE {
+		return SQLITE_OK
+	}
+	if iSavepoint < 0 {
+		if op == SAVEPOINT_ROLLBACK {
+			bt.mu.Lock()
+			s := bt.txSnapshot
+			bt.savepoints = nil
+			bt.mu.Unlock()
+			if s != nil {
+				if err := bt.restoreSnapshot(*s); err != nil {
+					return minweightSQLiteError(err)
+				}
+			}
+		}
+		return SQLITE_OK
+	}
+	bt.mu.Lock()
+	savepoint := int(iSavepoint)
+	if savepoint >= len(bt.savepoints) {
+		bt.mu.Unlock()
+		return SQLITE_OK
+	}
+	s := bt.savepoints[savepoint]
+	if op == SAVEPOINT_RELEASE {
+		bt.savepoints = bt.savepoints[:savepoint]
+		bt.mu.Unlock()
+		return SQLITE_OK
+	}
+	bt.savepoints = bt.savepoints[:savepoint+1]
+	bt.mu.Unlock()
+	if err := bt.restoreSnapshot(s); err != nil {
+		return minweightSQLiteError(err)
+	}
 	return SQLITE_OK
 }
 

@@ -1,6 +1,6 @@
 # Minweight Storage Engine Progress
 
-Last updated: 2026-06-03.
+Last updated: 2026-06-04.
 
 ## Current Status
 
@@ -26,6 +26,7 @@ Last updated: 2026-06-03.
 - Added physical placeholder open handling for path-backed minweight databases so chmod checks can target an on-disk name and invalid parent directories fail with `SQLITE_CANTOPEN`.
 - Added minweight logical `Serialize`/`Deserialize` round-trip support for schema and row data without pretending to expose SQLite page bytes.
 - Matched `SQLITE_FCNTL_PERSIST_WAL` for minweight's path-backed databases with `-wal` placeholder cleanup/persistence behavior.
+- Matched write transaction rollback, explicit savepoint rollback/release, and statement-level rollback for minweight logical state.
 
 ## Focused Test Policy
 
@@ -56,7 +57,7 @@ Do not run the full `TestRegisteredFunctions` with a 180s timeout as a routine n
 - `TestRegisteredFunctions/QueryContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Verified under minweight on 2026-06-03; keep it out of the focused script and run it only when specifically checking interrupt behavior.
 - `TestRegisteredFunctions/ExecContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Verified under minweight on 2026-06-03; keep it out of the focused script and run it only when specifically checking interrupt behavior.
 - `TestIssue53`: passes under minweight but takes about 13s on darwin/arm64. Keep it out of the focused script; run it in full minweight checks or when index seek/order code changes.
-- Full `env SQLITE_TEST_STORAGE_ENGINE=minweight go test ./`: currently about 8m20s on darwin/arm64 because it includes the two expiring-context stress tests. Run before commit and after broad engine changes, not after every local edit.
+- Full `env SQLITE_TEST_STORAGE_ENGINE=minweight go test ./`: currently about 8m20s on darwin/arm64 because it includes the two expiring-context stress tests. Latest full run: 500.464s on 2026-06-04. Run before commit and after broad engine changes, not after every local edit.
 - `./test-storage-engine.sh`: includes cross-target lib compilation matrix. Run before commit, not after each narrow code edit.
 
 ## Minweight-Specific Skips
