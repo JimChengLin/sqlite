@@ -66,6 +66,8 @@ type minweightBtree struct {
 	db          uintptr
 	txnState    int32
 	readOnly    bool
+	persistWAL  bool
+	walActive   bool
 }
 
 type minweightTable struct {
@@ -190,6 +192,7 @@ func minweightAllocCString(ctx BtreeContext, s string) uintptr {
 	if len(s) != 0 {
 		copy(unsafe.Slice((*byte)(unsafe.Pointer(p)), len(s)+1), s)
 	}
+	*(*byte)(unsafe.Pointer(p + uintptr(len(s)))) = 0
 	return p
 }
 
@@ -363,6 +366,55 @@ func (bt *minweightBtree) beginTrans(wrflag int32) {
 func (bt *minweightBtree) ensureWritable() int32 {
 	if bt.readOnly {
 		return SQLITE_READONLY
+	}
+	return SQLITE_OK
+}
+
+func (bt *minweightBtree) walFilename() string {
+	if bt.filename == 0 {
+		return ""
+	}
+	return libc.GoString(bt.filename) + "-wal"
+}
+
+func (bt *minweightBtree) createWALPlaceholder() int32 {
+	name := bt.walFilename()
+	if name == "" {
+		return SQLITE_OK
+	}
+	bt.mu.Lock()
+	active := bt.walActive
+	bt.mu.Unlock()
+	if active {
+		return SQLITE_OK
+	}
+	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0666)
+	if err != nil {
+		return SQLITE_CANTOPEN
+	}
+	if err := f.Close(); err != nil {
+		return SQLITE_CANTOPEN
+	}
+	bt.mu.Lock()
+	bt.walActive = true
+	bt.mu.Unlock()
+	return SQLITE_OK
+}
+
+func (bt *minweightBtree) closeWALPlaceholder() int32 {
+	name := bt.walFilename()
+	if name == "" {
+		return SQLITE_OK
+	}
+	bt.mu.Lock()
+	remove := bt.walActive && !bt.persistWAL
+	bt.walActive = false
+	bt.mu.Unlock()
+	if !remove {
+		return SQLITE_OK
+	}
+	if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
+		return SQLITE_IOERR
 	}
 	return SQLITE_OK
 }
@@ -662,6 +714,11 @@ func (e *minweightStorageEngine) BtreeClose(ctx BtreeContext, p BtreeHandle) (r 
 	if bt != nil && bt.schema != 0 {
 		Xsqlite3_free(ctx.tls, bt.schema)
 	}
+	if bt != nil {
+		if rc := bt.closeWALPlaceholder(); rc != SQLITE_OK {
+			return rc
+		}
+	}
 	if bt != nil && bt.pager != 0 {
 		Xsqlite3_free(ctx.tls, bt.pager)
 	}
@@ -681,6 +738,30 @@ func (e *minweightStorageEngine) BtreeClose(ctx BtreeContext, p BtreeHandle) (r 
 		bt.releaseTrans()
 	}
 	return SQLITE_OK
+}
+
+func (e *minweightStorageEngine) FileControlPersistWAL(ctx BtreeContext, db SQLiteHandle, dbName string, mode int32) (int32, int32) {
+	if dbName != "" && dbName != "main" {
+		return mode, SQLITE_ERROR
+	}
+	e.mu.Lock()
+	token := e.aliases[db.ptr]
+	bt := e.btrees[token]
+	e.mu.Unlock()
+	if bt == nil {
+		return mode, SQLITE_ERROR
+	}
+	bt.mu.Lock()
+	if mode >= 0 {
+		bt.persistWAL = mode != 0
+	}
+	if bt.persistWAL {
+		mode = 1
+	} else {
+		mode = 0
+	}
+	bt.mu.Unlock()
+	return mode, SQLITE_OK
 }
 
 func (e *minweightStorageEngine) BtreeSetCacheSize(ctx BtreeContext, p BtreeHandle, mxPage int32) (r int32) {
@@ -738,6 +819,9 @@ func (e *minweightStorageEngine) BtreeBeginTrans(ctx BtreeContext, p BtreeHandle
 	}
 	if wrflag != 0 {
 		if rc := bt.ensureWritable(); rc != SQLITE_OK {
+			return rc
+		}
+		if rc := bt.createWALPlaceholder(); rc != SQLITE_OK {
 			return rc
 		}
 	}

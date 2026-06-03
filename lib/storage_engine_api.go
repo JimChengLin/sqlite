@@ -135,6 +135,12 @@ type StorageEngineBtreeClearCache interface {
 	BtreeClearCache(ctx BtreeContext, p BtreeHandle)
 }
 
+// StorageEngineFileControlPersistWAL is implemented by engines that model
+// SQLITE_FCNTL_PERSIST_WAL outside SQLite's native VFS file object.
+type StorageEngineFileControlPersistWAL interface {
+	FileControlPersistWAL(ctx BtreeContext, db SQLiteHandle, dbName string, mode int32) (int32, int32)
+}
+
 type nativeBtreeStorageEngine struct{}
 
 type storageEngineHolder struct {
@@ -164,6 +170,14 @@ func SetStorageEngine(engine StorageEngine) {
 		engine = nativeBtreeStorageEngine{}
 	}
 	currentStorageEngine.Store(storageEngineHolder{engine: engine})
+}
+
+func StorageEngineFileControlPersistWALMode(tls *libc.TLS, db uintptr, dbName string, mode int32) (int32, int32) {
+	engine, ok := storageEngine().(StorageEngineFileControlPersistWAL)
+	if !ok {
+		return mode, SQLITE_ERROR
+	}
+	return engine.FileControlPersistWAL(btreeContext(tls), sqliteHandle(tls, db), dbName, mode)
 }
 
 // BtreeContext is the per-call SQLite runtime context seen by storage engines.

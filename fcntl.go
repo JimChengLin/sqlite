@@ -26,6 +26,14 @@ type FileControl interface {
 var _ FileControl = (*conn)(nil)
 
 func (c *conn) FileControlPersistWAL(dbName string, mode int) (int, error) {
+	if !sqlite3.StorageEngineIsNative() {
+		v, rc := sqlite3.StorageEngineFileControlPersistWALMode(c.tls, c.db, dbName, int32(mode))
+		if rc != sqlite3.SQLITE_OK {
+			return int(v), c.errstr(rc)
+		}
+		return int(v), nil
+	}
+
 	pi32 := c.tls.Alloc(4)
 	defer c.tls.Free(4)
 

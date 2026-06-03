@@ -25,6 +25,7 @@ Last updated: 2026-06-03.
 - Matched `mode=ro` readonly handles: minweight now reports `sqlite3_db_readonly` through `BtreeIsReadonly` and rejects write transactions with `SQLITE_READONLY`.
 - Added physical placeholder open handling for path-backed minweight databases so chmod checks can target an on-disk name and invalid parent directories fail with `SQLITE_CANTOPEN`.
 - Added minweight logical `Serialize`/`Deserialize` round-trip support for schema and row data without pretending to expose SQLite page bytes.
+- Matched `SQLITE_FCNTL_PERSIST_WAL` for minweight's path-backed databases with `-wal` placeholder cleanup/persistence behavior.
 
 ## Focused Test Policy
 
@@ -64,8 +65,7 @@ These tests are intentionally skipped only when `SQLITE_TEST_STORAGE_ENGINE=minw
 
 - `TestDBPageVtab`: `sqlite_dbpage` exposes physical SQLite pages.
 - `TestVFS`: VFS-backed SQLite page file contents.
-- `TestFcntlPersistWAL`: WAL files and `PERSIST_WAL` file-control.
 
 ## TODO
 
-- Decide whether physical page features remain explicitly unsupported or get a page-file compatibility layer: `sqlite_dbpage`, VFS-backed DB files, WAL persistence, and chmod-only read-only detection are in this bucket.
+- Decide whether physical page features remain explicitly unsupported or get a page-file compatibility layer: `sqlite_dbpage`, VFS-backed DB files, valid WAL frame contents, and chmod-only read-only detection are in this bucket.
