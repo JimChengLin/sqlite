@@ -15,6 +15,107 @@ import (
 	"modernc.org/libc"
 )
 
+type minweightBtreeTestHarness struct {
+	tls     *libc.TLS
+	engine  *minweightStorageEngine
+	bt      *minweightBtree
+	ctx     BtreeContext
+	btree   BtreeHandle
+	cursors []*BtCursor
+}
+
+func newMinweightBtreeTestHarness(t *testing.T) *minweightBtreeTestHarness {
+	t.Helper()
+	tls := libc.NewTLS()
+	t.Cleanup(tls.Close)
+
+	engine := NewMinweightStorageEngine().(*minweightStorageEngine)
+	bt := &minweightBtree{minweightDatabase: minweightNewDatabase()}
+	engine.btrees[1] = bt
+	return &minweightBtreeTestHarness{
+		tls:    tls,
+		engine: engine,
+		bt:     bt,
+		ctx:    BtreeContext{tls: tls},
+		btree:  BtreeHandle{tls: tls, ptr: 1},
+	}
+}
+
+func (h *minweightBtreeTestHarness) putRow(t *testing.T, rowid int64, payload []byte) {
+	t.Helper()
+	if err := h.bt.store.Put(minweightTableKey(1, rowid), payload); err != nil {
+		t.Fatal(err)
+	}
+	h.bt.noteInsert(1, rowid, false)
+	h.bt.dataVer++
+}
+
+func (h *minweightBtreeTestHarness) cursor(t *testing.T, writable bool) BtreeCursorHandle {
+	t.Helper()
+	rawCursor := new(BtCursor)
+	h.cursors = append(h.cursors, rawCursor)
+	cursor := BtreeCursorHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(rawCursor))}
+	var wrFlag int32
+	if writable {
+		wrFlag = 1
+	}
+	if rc := h.engine.BtreeCursor(h.ctx, h.btree, 1, wrFlag, BtreeKeyInfoHandle{}, cursor); rc != SQLITE_OK {
+		t.Fatalf("BtreeCursor rc = %d, want SQLITE_OK", rc)
+	}
+	return cursor
+}
+
+func (h *minweightBtreeTestHarness) moveToRow(t *testing.T, cursor BtreeCursorHandle, rowid int64) {
+	t.Helper()
+	var moveResult int32
+	if rc := h.engine.BtreeTableMoveto(h.ctx, cursor, rowid, 0, BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&moveResult))}); rc != SQLITE_OK {
+		t.Fatalf("BtreeTableMoveto rc = %d, want SQLITE_OK", rc)
+	}
+	if moveResult != 0 {
+		t.Fatalf("moveResult = %d, want 0", moveResult)
+	}
+}
+
+func (h *minweightBtreeTestHarness) replaceRow(t *testing.T, rowid int64, payload []byte) {
+	t.Helper()
+	cursor := h.cursor(t, true)
+	p := BtreePayload{
+		FnKey:  Tsqlite3_int64(rowid),
+		FnData: int32(len(payload)),
+	}
+	if len(payload) != 0 {
+		p.FpData = uintptr(unsafe.Pointer(&payload[0]))
+	}
+	if rc := h.engine.BtreeInsert(h.ctx, cursor, BtreePayloadHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&p))}, 0, 0); rc != SQLITE_OK {
+		t.Fatalf("BtreeInsert rc = %d, want SQLITE_OK", rc)
+	}
+}
+
+func (h *minweightBtreeTestHarness) assertIncrblobExpired(t *testing.T, cursor BtreeCursorHandle) {
+	t.Helper()
+	if got := h.engine.BtreeCursorHasMoved(h.ctx, cursor); got != 1 {
+		t.Fatalf("BtreeCursorHasMoved = %d, want 1", got)
+	}
+	if got := h.engine.BtreeCursorIsValidNN(h.ctx, cursor); got != 0 {
+		t.Fatalf("BtreeCursorIsValidNN = %d, want 0", got)
+	}
+	var differentRow int32
+	if rc := h.engine.BtreeCursorRestore(h.ctx, cursor, BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&differentRow))}); rc != SQLITE_OK {
+		t.Fatalf("BtreeCursorRestore rc = %d, want SQLITE_OK", rc)
+	}
+	if differentRow != 1 {
+		t.Fatalf("differentRow = %d, want 1", differentRow)
+	}
+	buf := make([]byte, 1)
+	if rc := h.engine.BtreePayloadChecked(h.ctx, cursor, 0, 1, BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&buf[0]))}); rc != SQLITE_ABORT {
+		t.Fatalf("BtreePayloadChecked rc = %d, want SQLITE_ABORT", rc)
+	}
+	data := []byte("z")
+	if rc := h.engine.BtreePutData(h.ctx, cursor, 0, 1, BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&data[0]))}); rc != SQLITE_ABORT {
+		t.Fatalf("BtreePutData rc = %d, want SQLITE_ABORT", rc)
+	}
+}
+
 func TestMinweightCursorRestoreRefreshesChangedRow(t *testing.T) {
 	tls := libc.NewTLS()
 	defer tls.Close()
@@ -68,6 +169,64 @@ func TestMinweightCursorRestoreRefreshesChangedRow(t *testing.T) {
 	}
 	if got := engine.BtreeCursorHasMoved(ctx, cursor); got != 0 {
 		t.Fatalf("BtreeCursorHasMoved after restore = %d, want 0", got)
+	}
+}
+
+func TestMinweightIncrblobCursorInvalidatedByReplace(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	h.putRow(t, 1, []byte("abc"))
+	h.putRow(t, 2, []byte("xyz"))
+
+	expired := h.cursor(t, false)
+	h.moveToRow(t, expired, 1)
+	h.engine.BtreeIncrblobCursor(h.ctx, expired)
+
+	stillValid := h.cursor(t, false)
+	h.moveToRow(t, stillValid, 2)
+	h.engine.BtreeIncrblobCursor(h.ctx, stillValid)
+
+	h.replaceRow(t, 1, []byte("def"))
+	h.assertIncrblobExpired(t, expired)
+
+	buf := make([]byte, 3)
+	if rc := h.engine.BtreePayloadChecked(h.ctx, stillValid, 0, 3, BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&buf[0]))}); rc != SQLITE_OK {
+		t.Fatalf("BtreePayloadChecked for other row rc = %d, want SQLITE_OK", rc)
+	}
+	if !bytes.Equal(buf, []byte("xyz")) {
+		t.Fatalf("other row payload = %q, want xyz", buf)
+	}
+	got, ok, err := h.bt.store.Get(minweightTableKey(1, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("replaced row disappeared")
+	}
+	if !bytes.Equal(got, []byte("def")) {
+		t.Fatalf("replaced row payload = %q, want def", got)
+	}
+}
+
+func TestMinweightIncrblobCursorInvalidatedByClearTable(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	h.putRow(t, 1, []byte("abc"))
+
+	cursor := h.cursor(t, false)
+	h.moveToRow(t, cursor, 1)
+	h.engine.BtreeIncrblobCursor(h.ctx, cursor)
+
+	var changes int32
+	if rc := h.engine.BtreeClearTable(h.ctx, h.btree, 1, BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&changes))}); rc != SQLITE_OK {
+		t.Fatalf("BtreeClearTable rc = %d, want SQLITE_OK", rc)
+	}
+	if changes != 1 {
+		t.Fatalf("changes = %d, want 1", changes)
+	}
+	h.assertIncrblobExpired(t, cursor)
+	if _, ok, err := h.bt.store.Get(minweightTableKey(1, 1)); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatal("cleared row still exists")
 	}
 }
 

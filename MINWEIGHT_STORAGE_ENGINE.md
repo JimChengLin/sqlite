@@ -36,6 +36,7 @@ Last updated: 2026-06-04.
 - Added minweight logical `BtreeIntegrityCheck`: it scans the minweight KV snapshot, validates table/index key shapes, root metadata, row counts, and int-key rowid bounds, then feeds row counts back to SQLite's `integrity_check` registers.
 - Matched incremental blob `BtreePutData` bounds: writes past the existing payload now return `SQLITE_CORRUPT` without growing or modifying the row.
 - Matched incremental blob `BtreePutData` cursor permissions: writes through read-only cursors now return `SQLITE_READONLY` and leave the row unchanged.
+- Matched incremental blob cursor invalidation: replacing/deleting a row, or clearing/dropping an int-key table, expires matching open blob cursors so checked blob read/write returns `SQLITE_ABORT`.
 
 ## Focused Test Policy
 
