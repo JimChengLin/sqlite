@@ -81,6 +81,12 @@ func newConn(dsn string) (*conn, error) {
 		c.Close()
 		return nil, err
 	}
+	if !sqlite3.StorageEngineIsNative() && vfsName != "" {
+		if err := c.importVFSLogicalSnapshot(dsn, vfsName); err != nil {
+			c.Close()
+			return nil, err
+		}
+	}
 
 	// sqlite3_db_filename returns an empty string for databases that
 	// are not backed by a file (":memory:", "file::memory:", shared-cache
@@ -100,6 +106,42 @@ func newConn(dsn string) (*conn, error) {
 	}
 
 	return c, nil
+}
+
+func (c *conn) importVFSLogicalSnapshot(dsn, vfsName string) error {
+	var snapshot []byte
+	if err := sqlite3.WithNativeStorageEngine(func() error {
+		src := &conn{tls: libc.NewTLS()}
+		db, err := src.openV2(
+			dsn,
+			vfsName,
+			sqlite3.SQLITE_OPEN_READONLY|sqlite3.SQLITE_OPEN_FULLMUTEX|sqlite3.SQLITE_OPEN_URI,
+		)
+		if err != nil {
+			src.tls.Close()
+			return err
+		}
+		src.db = db
+		defer src.Close()
+		if err := src.extendedResultCodes(true); err != nil {
+			return err
+		}
+		snapshot, err = logicalSerialize(src)
+		return err
+	}); err != nil {
+		return fmt.Errorf("sqlite: import VFS database: %w", err)
+	}
+	if err := logicalDeserialize(c, snapshot); err != nil {
+		return fmt.Errorf("sqlite: replay VFS database into storage engine: %w", err)
+	}
+	ok, rc := sqlite3.StorageEngineMarkReadOnly(c.tls, c.db)
+	if rc != sqlite3.SQLITE_OK {
+		return fmt.Errorf("sqlite: mark VFS database readonly: %w", errstrForDB(c.tls, rc, c.db))
+	}
+	if !ok {
+		return fmt.Errorf("sqlite: storage engine cannot mark VFS database readonly")
+	}
+	return nil
 }
 
 // parseTime attempts to parse s as a time encoding. If hintIdx is a valid

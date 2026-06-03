@@ -6,6 +6,7 @@ package sqlite3
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -162,6 +163,12 @@ type StorageEngineLogicalMetadataProvider interface {
 	RestoreLogicalMetadata(ctx BtreeContext, db SQLiteHandle, meta StorageEngineLogicalMetadata) int32
 }
 
+// StorageEngineReadOnlyMarker is implemented by engines that can mark a
+// database handle readonly after loading external immutable content.
+type StorageEngineReadOnlyMarker interface {
+	MarkReadOnly(ctx BtreeContext, db SQLiteHandle) int32
+}
+
 type nativeBtreeStorageEngine struct{}
 
 type storageEngineHolder struct {
@@ -169,6 +176,7 @@ type storageEngineHolder struct {
 }
 
 var currentStorageEngine atomic.Value
+var storageEngineSwitchMu sync.Mutex
 
 func init() {
 	currentStorageEngine.Store(storageEngineHolder{engine: nativeBtreeStorageEngine{}})
@@ -183,6 +191,17 @@ func storageEngine() StorageEngine {
 func StorageEngineIsNative() bool {
 	_, ok := storageEngine().(nativeBtreeStorageEngine)
 	return ok
+}
+
+// WithNativeStorageEngine runs fn while btree calls dispatch to the generated
+// SQLite btree implementation, then restores the previous engine.
+func WithNativeStorageEngine(fn func() error) error {
+	storageEngineSwitchMu.Lock()
+	defer storageEngineSwitchMu.Unlock()
+	prev := currentStorageEngine.Load().(storageEngineHolder)
+	currentStorageEngine.Store(storageEngineHolder{engine: nativeBtreeStorageEngine{}})
+	defer currentStorageEngine.Store(prev)
+	return fn()
 }
 
 func storageEngineLogicalDBPageResult(tls *libc.TLS, ctx uintptr, pageSize int32) int32 {
@@ -248,6 +267,14 @@ func StorageEngineRestoreLogicalMetadata(tls *libc.TLS, db uintptr, meta Storage
 		return false, SQLITE_OK
 	}
 	return true, engine.RestoreLogicalMetadata(btreeContext(tls), sqliteHandle(tls, db), meta)
+}
+
+func StorageEngineMarkReadOnly(tls *libc.TLS, db uintptr) (bool, int32) {
+	engine, ok := storageEngine().(StorageEngineReadOnlyMarker)
+	if !ok {
+		return false, SQLITE_OK
+	}
+	return true, engine.MarkReadOnly(btreeContext(tls), sqliteHandle(tls, db))
 }
 
 // BtreeContext is the per-call SQLite runtime context seen by storage engines.

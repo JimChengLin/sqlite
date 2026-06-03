@@ -3140,10 +3140,6 @@ var fs embed.FS
 var fs2 embed.FS
 
 func TestVFS(t *testing.T) {
-	if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
-		t.Skip("minweight storage engine does not model VFS-backed SQLite page files yet")
-	}
-
 	fn, f, err := vfs.New(fs)
 	if err != nil {
 		t.Fatal(err)
@@ -3223,6 +3219,10 @@ func TestVFS(t *testing.T) {
 	t.Log(b)
 	if g, e := fmt.Sprint(b), "[123 xyz abc def]"; g != e {
 		t.Fatalf("got %q, expected %q", g, e)
+	}
+
+	if _, err := db.Exec("insert into t values(7, 8, 9)"); err == nil {
+		t.Fatal("expected write to read-only VFS database to fail")
 	}
 }
 

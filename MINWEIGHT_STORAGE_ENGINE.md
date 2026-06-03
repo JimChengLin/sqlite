@@ -56,6 +56,7 @@ Last updated: 2026-06-04.
 - Preserved minweight hidden root allocation metadata (`nextRoot` and `freeRoots`) across logical `Serialize`/`Deserialize`, `Backup`, and `Restore`, so later `CREATE TABLE` root reuse follows the source freelist order even when visible `sqlite_schema.rootpage` is ambiguous.
 - Matched chmod-only readonly opens for existing path-backed minweight databases: when a read-write placeholder open is denied but read-only open succeeds, the handle is marked readonly and rejects writes without requiring `mode=ro`.
 - Matched the existing `TestDBPageVtab` read path for minweight by exposing a logical page-1 blob with the SQLite file header instead of letting the generated dbpage virtual table dereference the fake pager. This is still not a full physical page-image implementation.
+- Matched the existing read-only `TestVFS` path for minweight: when a connection opens a database through a custom VFS, SQLite's native btree is used briefly to read the VFS-backed page file into a logical snapshot, then that snapshot is replayed into minweight and the resulting handle is marked readonly.
 
 ## Focused Test Policy
 
@@ -69,6 +70,7 @@ Routine minweight check:
 
 This focused list includes `TestMinweightStorageEngineIntegrityCheck` plus the direct `./lib` minweight integrity/cursor tests.
 It also runs `TestDBPageVtab`, which now verifies the minweight logical page-1 `sqlite_dbpage` compatibility path.
+It now also runs `TestVFS`, which verifies read-only VFS page-file import and readonly write rejection.
 
 Broad top-level minweight check without the two context-expiration stress subtests:
 
@@ -76,7 +78,7 @@ Broad top-level minweight check without the two context-expiration stress subtes
 ./test-minweight-broad.sh
 ```
 
-Latest broad run: 90.273s on 2026-06-04 with `-p 8 -parallel 8`. Run this after non-interrupt engine behavior changes when the full context stress coverage is not the point. The broad script skips only `TestRegisteredFunctions/QueryContext_with_context_expiring` and `TestRegisteredFunctions/ExecContext_with_context_expiring`.
+Latest broad run: 91.500s on 2026-06-04 with `-p 8 -parallel 8`. Run this after non-interrupt engine behavior changes when the full context stress coverage is not the point. The broad script skips only `TestRegisteredFunctions/QueryContext_with_context_expiring` and `TestRegisteredFunctions/ExecContext_with_context_expiring`.
 
 Full top-level minweight check, run after broad engine semantics changes, context-interrupt changes, or before larger milestones:
 
@@ -104,10 +106,8 @@ Do not run the full `TestRegisteredFunctions` with a 180s timeout as a routine n
 
 ## Minweight-Specific Skips
 
-These tests are intentionally skipped only when `SQLITE_TEST_STORAGE_ENGINE=minweight` is set:
-
-- `TestVFS`: VFS-backed SQLite page file contents.
+No top-level tests are currently skipped only because `SQLITE_TEST_STORAGE_ENGINE=minweight` is set.
 
 ## TODO
 
-- Decide whether physical page features remain explicitly unsupported or get a page-file compatibility layer: full multi-page/updateable `sqlite_dbpage`, VFS-backed DB files, and valid WAL frame contents are in this bucket. The current minweight integrity check is logical only and does not validate SQLite page images.
+- Decide whether physical page features remain explicitly unsupported or get a page-file compatibility layer: full multi-page/updateable `sqlite_dbpage`, writeable VFS page-file behavior, and valid WAL frame contents are in this bucket. The current minweight integrity check is logical only and does not validate SQLite page images.

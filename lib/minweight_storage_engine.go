@@ -1328,6 +1328,20 @@ func (e *minweightStorageEngine) FileControlPersistWAL(ctx BtreeContext, db SQLi
 	return mode, SQLITE_OK
 }
 
+func (e *minweightStorageEngine) MarkReadOnly(ctx BtreeContext, db SQLiteHandle) int32 {
+	bt := e.btreeForDB(db)
+	if bt == nil {
+		return SQLITE_ERROR
+	}
+	bt.mu.Lock()
+	bt.readOnly = true
+	if bt.pager != 0 {
+		(*Pager)(unsafe.Pointer(bt.pager)).FreadOnly = 1
+	}
+	bt.mu.Unlock()
+	return SQLITE_OK
+}
+
 func (e *minweightStorageEngine) BeginLogicalBackup(ctx BtreeContext, db SQLiteHandle) int32 {
 	bt := e.btreeForDB(db)
 	if bt == nil {
