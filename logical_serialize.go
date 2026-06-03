@@ -32,9 +32,11 @@ type logicalSerializedSettings struct {
 }
 
 type logicalSerializedSchema struct {
-	Type string `json:"type"`
-	Name string `json:"name"`
-	SQL  string `json:"sql"`
+	Type     string `json:"type"`
+	Name     string `json:"name"`
+	TblName  string `json:"tblName,omitempty"`
+	RootPage int64  `json:"rootPage,omitempty"`
+	SQL      string `json:"sql"`
 }
 
 type logicalSerializedTable struct {
@@ -107,24 +109,17 @@ func logicalDeserialize(c *conn, buf []byte) error {
 	if err := logicalBackupClearDestination(c); err != nil {
 		return err
 	}
-	for _, object := range db.Schema {
-		if object.Type == "table" {
-			if err := logicalBackupExec(c, object.SQL); err != nil {
-				return err
-			}
-		}
+	fillers, err := logicalDeserializeTables(c, db.Schema)
+	if err != nil {
+		return err
 	}
 	for _, table := range db.Tables {
 		if err := logicalDeserializeTable(c, table); err != nil {
 			return err
 		}
 	}
-	for _, object := range db.Schema {
-		if object.Type != "table" {
-			if err := logicalBackupExec(c, object.SQL); err != nil {
-				return err
-			}
-		}
+	if err := logicalDeserializeNonTables(c, db.Schema, fillers); err != nil {
+		return err
 	}
 	return nil
 }
@@ -201,7 +196,7 @@ func logicalSecureDeletePragmaValue(v int64) string {
 
 func logicalSerializeSchema(c *conn) ([]logicalSerializedSchema, error) {
 	rows, err := logicalBackupQuery(c, `
-		SELECT type, name, sql
+		SELECT type, name, tbl_name, rootpage, sql
 		FROM sqlite_schema
 		WHERE sql IS NOT NULL
 		  AND name NOT LIKE 'sqlite_%'
@@ -229,13 +224,184 @@ func logicalSerializeSchema(c *conn) ([]logicalSerializedSchema, error) {
 		if !ok {
 			return nil, fmt.Errorf("sqlite: serialize schema name is %T", row[1])
 		}
-		sql, ok := row[2].(string)
+		tblName, ok := row[2].(string)
 		if !ok {
-			return nil, fmt.Errorf("sqlite: serialize schema SQL is %T", row[2])
+			return nil, fmt.Errorf("sqlite: serialize schema table name is %T", row[2])
 		}
-		out = append(out, logicalSerializedSchema{Type: typ, Name: name, SQL: sql})
+		rootPage, ok := row[3].(int64)
+		if !ok {
+			return nil, fmt.Errorf("sqlite: serialize schema rootpage is %T", row[3])
+		}
+		sql, ok := row[4].(string)
+		if !ok {
+			return nil, fmt.Errorf("sqlite: serialize schema SQL is %T", row[4])
+		}
+		out = append(out, logicalSerializedSchema{Type: typ, Name: name, TblName: tblName, RootPage: rootPage, SQL: sql})
 	}
 	return out, nil
+}
+
+func logicalDeserializeTables(c *conn, schema []logicalSerializedSchema) (map[int64]string, error) {
+	fillers := map[int64]string{}
+	preserveRootPages := logicalSchemaHasRootPages(schema)
+	usedNames := logicalSchemaNames(schema)
+	for _, object := range schema {
+		if object.Type != "table" {
+			continue
+		}
+		if preserveRootPages && object.RootPage > 0 {
+			if err := logicalReserveRootPagesBefore(c, object.RootPage, fillers, usedNames); err != nil {
+				return nil, err
+			}
+		}
+		if err := logicalBackupExec(c, object.SQL); err != nil {
+			return nil, err
+		}
+		if preserveRootPages && object.RootPage > 0 {
+			if err := logicalCheckObjectRootPage(c, object.Name, object.RootPage); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return fillers, nil
+}
+
+func logicalDeserializeNonTables(c *conn, schema []logicalSerializedSchema, fillers map[int64]string) error {
+	preserveRootPages := logicalSchemaHasRootPages(schema)
+	for _, object := range schema {
+		if object.Type == "table" {
+			continue
+		}
+		if preserveRootPages && object.RootPage > 0 {
+			if filler := fillers[object.RootPage]; filler != "" {
+				if err := logicalBackupExec(c, "DROP TABLE "+quoteIdent(filler)); err != nil {
+					return err
+				}
+				delete(fillers, object.RootPage)
+			}
+		}
+		if err := logicalBackupExec(c, object.SQL); err != nil {
+			return err
+		}
+		if preserveRootPages && object.RootPage > 0 {
+			if err := logicalCheckObjectRootPage(c, object.Name, object.RootPage); err != nil {
+				return err
+			}
+		}
+	}
+	return logicalDropRootFillers(c, fillers)
+}
+
+func logicalSchemaHasRootPages(schema []logicalSerializedSchema) bool {
+	for _, object := range schema {
+		if object.RootPage > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func logicalSchemaNames(schema []logicalSerializedSchema) map[string]bool {
+	names := map[string]bool{}
+	for _, object := range schema {
+		names[object.Name] = true
+	}
+	return names
+}
+
+func logicalReserveRootPagesBefore(c *conn, rootPage int64, fillers map[int64]string, usedNames map[string]bool) error {
+	maxRoot, err := logicalMaxRootPage(c)
+	if err != nil {
+		return err
+	}
+	for maxRoot < rootPage-1 {
+		name := logicalRootFillerName(usedNames, rootPage)
+		if err := logicalBackupExec(c, "CREATE TABLE "+quoteIdent(name)+"(x)"); err != nil {
+			return err
+		}
+		fillerRoot, err := logicalObjectRootPage(c, name)
+		if err != nil {
+			return err
+		}
+		if fillerRoot <= maxRoot || fillerRoot >= rootPage {
+			return fmt.Errorf("sqlite: root filler %s got rootpage %d while reserving before %d", name, fillerRoot, rootPage)
+		}
+		fillers[fillerRoot] = name
+		maxRoot = fillerRoot
+	}
+	return nil
+}
+
+func logicalRootFillerName(usedNames map[string]bool, rootPage int64) string {
+	for i := 0; ; i++ {
+		name := fmt.Sprintf("__minweight_root_filler_%d_%d", rootPage, i)
+		if !usedNames[name] {
+			usedNames[name] = true
+			return name
+		}
+	}
+}
+
+func logicalMaxRootPage(c *conn) (int64, error) {
+	rows, err := logicalBackupQuery(c, "SELECT COALESCE(max(rootpage), 1) FROM sqlite_schema WHERE rootpage > 0")
+	if err != nil {
+		return 0, err
+	}
+	if len(rows) != 1 || len(rows[0]) != 1 {
+		return 0, fmt.Errorf("sqlite: max rootpage query returned %d rows", len(rows))
+	}
+	rootPage, ok := rows[0][0].(int64)
+	if !ok {
+		return 0, fmt.Errorf("sqlite: max rootpage is %T", rows[0][0])
+	}
+	return rootPage, nil
+}
+
+func logicalObjectRootPage(c *conn, name string) (int64, error) {
+	rows, err := logicalBackupQuery(c, "SELECT rootpage FROM sqlite_schema WHERE name = "+quoteLiteral(name))
+	if err != nil {
+		return 0, err
+	}
+	if len(rows) != 1 || len(rows[0]) != 1 {
+		return 0, fmt.Errorf("sqlite: rootpage for %s returned %d rows", name, len(rows))
+	}
+	rootPage, ok := rows[0][0].(int64)
+	if !ok {
+		return 0, fmt.Errorf("sqlite: rootpage for %s is %T", name, rows[0][0])
+	}
+	return rootPage, nil
+}
+
+func logicalCheckObjectRootPage(c *conn, name string, want int64) error {
+	got, err := logicalObjectRootPage(c, name)
+	if err != nil {
+		return err
+	}
+	if got != want {
+		return fmt.Errorf("sqlite: rootpage for %s = %d, want %d", name, got, want)
+	}
+	return nil
+}
+
+func logicalDropRootFillers(c *conn, fillers map[int64]string) error {
+	roots := make([]int64, 0, len(fillers))
+	for root := range fillers {
+		roots = append(roots, root)
+	}
+	for i := 0; i < len(roots); i++ {
+		for j := i + 1; j < len(roots); j++ {
+			if roots[i] < roots[j] {
+				roots[i], roots[j] = roots[j], roots[i]
+			}
+		}
+	}
+	for _, root := range roots {
+		if err := logicalBackupExec(c, "DROP TABLE "+quoteIdent(fillers[root])); err != nil {
+			return err
+		}
+		delete(fillers, root)
+	}
+	return nil
 }
 
 func logicalSerializeTable(c *conn, name string) (logicalSerializedTable, error) {
