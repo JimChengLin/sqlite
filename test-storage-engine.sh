@@ -5,7 +5,7 @@ parallel=${TEST_PARALLEL:-4}
 : "${GOCACHE:=${TMPDIR:-/tmp}/sqlite-go-cache}"
 export GOCACHE
 
-storage_engine_tests='^(TestScalar|TestBlob|TestMemDB|TestSingleConn|TestConcurrentGoroutines|TestBinding|TestBeginMode|TestTxCommitBusyFix|TestConstraintPrimaryKeyError|TestConstraintUniqueError|TestBackupProgress|TestPreUpdateHook|TestFcntlDataVersion|TestDBPageVtab|TestExecReturningMultiRow|TestExecReturningMultiStatement|TestVtabUpdaterInsertUpdateDelete|TestColumnTextScan)$'
+storage_engine_tests='^(TestStorageEngineAPIIsExternallyImplementable|TestStorageEngineCanBeSelectedFromExternalPackage|TestStorageEngineCanBeSelectedConcurrently|TestStorageEngineHandleAPIsAreExternallyReachable|TestStorageEngineAPIDoesNotExposeRawABIInputs|TestScalar|TestBlob|TestMemDB|TestSingleConn|TestConcurrentGoroutines|TestBinding|TestBeginMode|TestTxCommitBusyFix|TestConstraintPrimaryKeyError|TestConstraintUniqueError|TestBackupProgress|TestPreUpdateHook|TestFcntlDataVersion|TestDBPageVtab|TestExecReturningMultiRow|TestExecReturningMultiStatement|TestVtabUpdaterInsertUpdateDelete|TestColumnTextScan)$'
 
 echo 'compile all packages without running tests'
 go test -p "$parallel" -parallel "$parallel" -run '^$' ./...

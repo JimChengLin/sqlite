@@ -6,794 +6,698 @@ package sqlite3
 
 import "modernc.org/libc"
 
-// storageEngine is the btree-facing storage abstraction. The default
-// implementation delegates to the generated SQLite btree code.
-type storageEngine interface {
-	_sqlite3BtreeEnter(tls *libc.TLS, p uintptr)
-	_sqlite3BtreeLeave(tls *libc.TLS, p uintptr)
-	_sqlite3BtreeEnterAll(tls *libc.TLS, db uintptr)
-	_sqlite3BtreeLeaveAll(tls *libc.TLS, db uintptr)
-	_sqlite3BtreeEnterCursor(tls *libc.TLS, pCur uintptr)
-	_sqlite3BtreeLeaveCursor(tls *libc.TLS, pCur uintptr)
-	_sqlite3BtreeClearCursor(tls *libc.TLS, pCur uintptr)
-	_sqlite3BtreeCursorHasMoved(tls *libc.TLS, pCur uintptr) (r int32)
-	_sqlite3BtreeFakeValidCursor(tls *libc.TLS) (r uintptr)
-	_sqlite3BtreeCursorRestore(tls *libc.TLS, pCur uintptr, pDifferentRow uintptr) (r int32)
-	_sqlite3BtreeCursorHintFlags(tls *libc.TLS, pCur uintptr, x uint32)
-	_sqlite3BtreeLastPage(tls *libc.TLS, p uintptr) (r TPgno)
-	_sqlite3BtreeOpen(tls *libc.TLS, pVfs uintptr, zFilename uintptr, db uintptr, ppBtree uintptr, flags int32, vfsFlags int32) (r int32)
-	_sqlite3BtreeClose(tls *libc.TLS, p uintptr) (r int32)
-	_sqlite3BtreeSetCacheSize(tls *libc.TLS, p uintptr, mxPage int32) (r int32)
-	_sqlite3BtreeSetSpillSize(tls *libc.TLS, p uintptr, mxPage int32) (r int32)
-	_sqlite3BtreeSetPagerFlags(tls *libc.TLS, p uintptr, pgFlags uint32) (r int32)
-	_sqlite3BtreeSetPageSize(tls *libc.TLS, p uintptr, pageSize int32, nReserve int32, iFix int32) (r int32)
-	_sqlite3BtreeGetPageSize(tls *libc.TLS, p uintptr) (r int32)
-	_sqlite3BtreeGetReserveNoMutex(tls *libc.TLS, p uintptr) (r int32)
-	_sqlite3BtreeGetRequestedReserve(tls *libc.TLS, p uintptr) (r int32)
-	_sqlite3BtreeMaxPageCount(tls *libc.TLS, p uintptr, mxPage TPgno) (r TPgno)
-	_sqlite3BtreeSecureDelete(tls *libc.TLS, p uintptr, newFlag int32) (r int32)
-	_sqlite3BtreeSetAutoVacuum(tls *libc.TLS, p uintptr, autoVacuum int32) (r int32)
-	_sqlite3BtreeGetAutoVacuum(tls *libc.TLS, p uintptr) (r int32)
-	_sqlite3BtreeNewDb(tls *libc.TLS, p uintptr) (r int32)
-	_sqlite3BtreeBeginTrans(tls *libc.TLS, p uintptr, wrflag int32, pSchemaVersion uintptr) (r int32)
-	_sqlite3BtreeIncrVacuum(tls *libc.TLS, p uintptr) (r int32)
-	_sqlite3BtreeCommitPhaseOne(tls *libc.TLS, p uintptr, zSuperJrnl uintptr) (r int32)
-	_sqlite3BtreeCommitPhaseTwo(tls *libc.TLS, p uintptr, bCleanup int32) (r int32)
-	_sqlite3BtreeCommit(tls *libc.TLS, p uintptr) (r int32)
-	_sqlite3BtreeTripAllCursors(tls *libc.TLS, pBtree uintptr, errCode int32, writeOnly int32) (r int32)
-	_sqlite3BtreeRollback(tls *libc.TLS, p uintptr, tripCode int32, writeOnly int32) (r int32)
-	_sqlite3BtreeBeginStmt(tls *libc.TLS, p uintptr, iStatement int32) (r int32)
-	_sqlite3BtreeSavepoint(tls *libc.TLS, p uintptr, op int32, iSavepoint int32) (r int32)
-	_sqlite3BtreeCursor(tls *libc.TLS, p uintptr, iTable TPgno, wrFlag int32, pKeyInfo uintptr, pCur uintptr) (r int32)
-	_sqlite3BtreeCursorSize(tls *libc.TLS) (r int32)
-	_sqlite3BtreeCursorZero(tls *libc.TLS, p uintptr)
-	_sqlite3BtreeCloseCursor(tls *libc.TLS, pCur uintptr) (r int32)
-	_sqlite3BtreeCursorIsValidNN(tls *libc.TLS, pCur uintptr) (r int32)
-	_sqlite3BtreeIntegerKey(tls *libc.TLS, pCur uintptr) (r Ti64)
-	_sqlite3BtreeCursorPin(tls *libc.TLS, pCur uintptr)
-	_sqlite3BtreeCursorUnpin(tls *libc.TLS, pCur uintptr)
-	_sqlite3BtreeOffset(tls *libc.TLS, pCur uintptr) (r Ti64)
-	_sqlite3BtreePayloadSize(tls *libc.TLS, pCur uintptr) (r Tu32)
-	_sqlite3BtreeMaxRecordSize(tls *libc.TLS, pCur uintptr) (r Tsqlite3_int64)
-	_sqlite3BtreePayload(tls *libc.TLS, pCur uintptr, offset Tu32, amt Tu32, pBuf uintptr) (r int32)
-	_sqlite3BtreePayloadChecked(tls *libc.TLS, pCur uintptr, offset Tu32, amt Tu32, pBuf uintptr) (r int32)
-	_sqlite3BtreePayloadFetch(tls *libc.TLS, pCur uintptr, pAmt uintptr) (r uintptr)
-	_sqlite3BtreeFirst(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32)
-	_sqlite3BtreeIsEmpty(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32)
-	_sqlite3BtreeLast(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32)
-	_sqlite3BtreeTableMoveto(tls *libc.TLS, pCur uintptr, intKey Ti64, biasRight int32, pRes uintptr) (r int32)
-	_sqlite3BtreeIndexMoveto(tls *libc.TLS, pCur uintptr, pIdxKey uintptr, pRes uintptr) (r int32)
-	_sqlite3BtreeEof(tls *libc.TLS, pCur uintptr) (r int32)
-	_sqlite3BtreeRowCountEst(tls *libc.TLS, pCur uintptr) (r Ti64)
-	_sqlite3BtreeNext(tls *libc.TLS, pCur uintptr, flags int32) (r int32)
-	_sqlite3BtreePrevious(tls *libc.TLS, pCur uintptr, flags int32) (r int32)
-	_sqlite3BtreeInsert(tls *libc.TLS, pCur uintptr, pX uintptr, flags int32, seekResult int32) (r int32)
-	_sqlite3BtreeTransferRow(tls *libc.TLS, pDest uintptr, pSrc uintptr, iKey Ti64) (r int32)
-	_sqlite3BtreeDelete(tls *libc.TLS, pCur uintptr, flags Tu8) (r int32)
-	_sqlite3BtreeCreateTable(tls *libc.TLS, p uintptr, piTable uintptr, flags int32) (r int32)
-	_sqlite3BtreeClearTable(tls *libc.TLS, p uintptr, iTable int32, pnChange uintptr) (r int32)
-	_sqlite3BtreeClearTableOfCursor(tls *libc.TLS, pCur uintptr) (r int32)
-	_sqlite3BtreeDropTable(tls *libc.TLS, p uintptr, iTable int32, piMoved uintptr) (r int32)
-	_sqlite3BtreeGetMeta(tls *libc.TLS, p uintptr, idx int32, pMeta uintptr)
-	_sqlite3BtreeUpdateMeta(tls *libc.TLS, p uintptr, idx int32, iMeta Tu32) (r int32)
-	_sqlite3BtreeCount(tls *libc.TLS, db uintptr, pCur uintptr, pnEntry uintptr) (r int32)
-	_sqlite3BtreePager(tls *libc.TLS, p uintptr) (r uintptr)
-	_sqlite3BtreeIntegrityCheck(tls *libc.TLS, db uintptr, p uintptr, aRoot uintptr, aCnt uintptr, nRoot int32, mxErr int32, pnErr uintptr, pzOut uintptr) (r int32)
-	_sqlite3BtreeGetFilename(tls *libc.TLS, p uintptr) (r uintptr)
-	_sqlite3BtreeGetJournalname(tls *libc.TLS, p uintptr) (r uintptr)
-	_sqlite3BtreeTxnState(tls *libc.TLS, p uintptr) (r int32)
-	_sqlite3BtreeCheckpoint(tls *libc.TLS, p uintptr, eMode int32, pnLog uintptr, pnCkpt uintptr) (r int32)
-	_sqlite3BtreeIsInBackup(tls *libc.TLS, p uintptr) (r int32)
-	_sqlite3BtreeSchema(tls *libc.TLS, p uintptr, nBytes int32, __ccgo_fp_xFree uintptr) (r uintptr)
-	_sqlite3BtreeSchemaLocked(tls *libc.TLS, p uintptr) (r int32)
-	_sqlite3BtreeLockTable(tls *libc.TLS, p uintptr, iTab int32, isWriteLock Tu8) (r int32)
-	_sqlite3BtreePutData(tls *libc.TLS, pCsr uintptr, offset Tu32, amt Tu32, z uintptr) (r int32)
-	_sqlite3BtreeIncrblobCursor(tls *libc.TLS, pCur uintptr)
-	_sqlite3BtreeSetVersion(tls *libc.TLS, pBtree uintptr, iVersion int32) (r int32)
-	_sqlite3BtreeCursorHasHint(tls *libc.TLS, pCsr uintptr, mask uint32) (r int32)
-	_sqlite3BtreeIsReadonly(tls *libc.TLS, p uintptr) (r int32)
-	_sqlite3BtreeClearCache(tls *libc.TLS, p uintptr)
-	_sqlite3BtreeSharable(tls *libc.TLS, p uintptr) (r int32)
-	_sqlite3BtreeConnectionCount(tls *libc.TLS, p uintptr) (r int32)
-	_sqlite3BtreeCopyFile(tls *libc.TLS, pTo uintptr, pFrom uintptr) (r int32)
-}
-
-type nativeBtreeStorageEngine struct{}
-
-var currentStorageEngine storageEngine = nativeBtreeStorageEngine{}
-
 func _sqlite3BtreeEnter(tls *libc.TLS, p uintptr) {
-	currentStorageEngine._sqlite3BtreeEnter(tls, p)
+	storageEngine().BtreeEnter(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeLeave(tls *libc.TLS, p uintptr) {
-	currentStorageEngine._sqlite3BtreeLeave(tls, p)
+	storageEngine().BtreeLeave(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeEnterAll(tls *libc.TLS, db uintptr) {
-	currentStorageEngine._sqlite3BtreeEnterAll(tls, db)
+	storageEngine().BtreeEnterAll(btreeContext(tls), sqliteHandle(tls, db))
 }
 
 func _sqlite3BtreeLeaveAll(tls *libc.TLS, db uintptr) {
-	currentStorageEngine._sqlite3BtreeLeaveAll(tls, db)
+	storageEngine().BtreeLeaveAll(btreeContext(tls), sqliteHandle(tls, db))
 }
 
 func _sqlite3BtreeEnterCursor(tls *libc.TLS, pCur uintptr) {
-	currentStorageEngine._sqlite3BtreeEnterCursor(tls, pCur)
+	storageEngine().BtreeEnterCursor(btreeContext(tls), btreeCursorHandle(tls, pCur))
 }
 
 func _sqlite3BtreeLeaveCursor(tls *libc.TLS, pCur uintptr) {
-	currentStorageEngine._sqlite3BtreeLeaveCursor(tls, pCur)
+	storageEngine().BtreeLeaveCursor(btreeContext(tls), btreeCursorHandle(tls, pCur))
 }
 
 func _sqlite3BtreeClearCursor(tls *libc.TLS, pCur uintptr) {
-	currentStorageEngine._sqlite3BtreeClearCursor(tls, pCur)
+	storageEngine().BtreeClearCursor(btreeContext(tls), btreeCursorHandle(tls, pCur))
 }
 
 func _sqlite3BtreeCursorHasMoved(tls *libc.TLS, pCur uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeCursorHasMoved(tls, pCur)
+	return storageEngine().BtreeCursorHasMoved(btreeContext(tls), btreeCursorHandle(tls, pCur))
 }
 
 func _sqlite3BtreeFakeValidCursor(tls *libc.TLS) (r uintptr) {
-	return currentStorageEngine._sqlite3BtreeFakeValidCursor(tls)
+	return storageEngine().BtreeFakeValidCursor(btreeContext(tls)).ptr
 }
 
 func _sqlite3BtreeCursorRestore(tls *libc.TLS, pCur uintptr, pDifferentRow uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeCursorRestore(tls, pCur, pDifferentRow)
+	return storageEngine().BtreeCursorRestore(btreeContext(tls), btreeCursorHandle(tls, pCur), btreeMemoryHandle(tls, pDifferentRow))
 }
 
 func _sqlite3BtreeCursorHintFlags(tls *libc.TLS, pCur uintptr, x uint32) {
-	currentStorageEngine._sqlite3BtreeCursorHintFlags(tls, pCur, x)
+	storageEngine().BtreeCursorHintFlags(btreeContext(tls), btreeCursorHandle(tls, pCur), x)
 }
 
 func _sqlite3BtreeLastPage(tls *libc.TLS, p uintptr) (r TPgno) {
-	return currentStorageEngine._sqlite3BtreeLastPage(tls, p)
+	return TPgno(storageEngine().BtreeLastPage(btreeContext(tls), btreeHandle(tls, p)))
 }
 
 func _sqlite3BtreeOpen(tls *libc.TLS, pVfs uintptr, zFilename uintptr, db uintptr, ppBtree uintptr, flags int32, vfsFlags int32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeOpen(tls, pVfs, zFilename, db, ppBtree, flags, vfsFlags)
+	return storageEngine().BtreeOpen(btreeContext(tls), btreeVFSHandle(tls, pVfs), btreeCStringHandle(tls, zFilename), sqliteHandle(tls, db), btreeMemoryHandle(tls, ppBtree), flags, vfsFlags)
 }
 
 func _sqlite3BtreeClose(tls *libc.TLS, p uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeClose(tls, p)
+	return storageEngine().BtreeClose(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeSetCacheSize(tls *libc.TLS, p uintptr, mxPage int32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeSetCacheSize(tls, p, mxPage)
+	return storageEngine().BtreeSetCacheSize(btreeContext(tls), btreeHandle(tls, p), mxPage)
 }
 
 func _sqlite3BtreeSetSpillSize(tls *libc.TLS, p uintptr, mxPage int32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeSetSpillSize(tls, p, mxPage)
+	return storageEngine().BtreeSetSpillSize(btreeContext(tls), btreeHandle(tls, p), mxPage)
 }
 
 func _sqlite3BtreeSetPagerFlags(tls *libc.TLS, p uintptr, pgFlags uint32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeSetPagerFlags(tls, p, pgFlags)
+	return storageEngine().BtreeSetPagerFlags(btreeContext(tls), btreeHandle(tls, p), pgFlags)
 }
 
 func _sqlite3BtreeSetPageSize(tls *libc.TLS, p uintptr, pageSize int32, nReserve int32, iFix int32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeSetPageSize(tls, p, pageSize, nReserve, iFix)
+	return storageEngine().BtreeSetPageSize(btreeContext(tls), btreeHandle(tls, p), pageSize, nReserve, iFix)
 }
 
 func _sqlite3BtreeGetPageSize(tls *libc.TLS, p uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeGetPageSize(tls, p)
+	return storageEngine().BtreeGetPageSize(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeGetReserveNoMutex(tls *libc.TLS, p uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeGetReserveNoMutex(tls, p)
+	return storageEngine().BtreeGetReserveNoMutex(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeGetRequestedReserve(tls *libc.TLS, p uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeGetRequestedReserve(tls, p)
+	return storageEngine().BtreeGetRequestedReserve(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeMaxPageCount(tls *libc.TLS, p uintptr, mxPage TPgno) (r TPgno) {
-	return currentStorageEngine._sqlite3BtreeMaxPageCount(tls, p, mxPage)
+	return TPgno(storageEngine().BtreeMaxPageCount(btreeContext(tls), btreeHandle(tls, p), uint32(mxPage)))
 }
 
 func _sqlite3BtreeSecureDelete(tls *libc.TLS, p uintptr, newFlag int32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeSecureDelete(tls, p, newFlag)
+	return storageEngine().BtreeSecureDelete(btreeContext(tls), btreeHandle(tls, p), newFlag)
 }
 
 func _sqlite3BtreeSetAutoVacuum(tls *libc.TLS, p uintptr, autoVacuum int32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeSetAutoVacuum(tls, p, autoVacuum)
+	return storageEngine().BtreeSetAutoVacuum(btreeContext(tls), btreeHandle(tls, p), autoVacuum)
 }
 
 func _sqlite3BtreeGetAutoVacuum(tls *libc.TLS, p uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeGetAutoVacuum(tls, p)
+	return storageEngine().BtreeGetAutoVacuum(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeNewDb(tls *libc.TLS, p uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeNewDb(tls, p)
+	return storageEngine().BtreeNewDb(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeBeginTrans(tls *libc.TLS, p uintptr, wrflag int32, pSchemaVersion uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeBeginTrans(tls, p, wrflag, pSchemaVersion)
+	return storageEngine().BtreeBeginTrans(btreeContext(tls), btreeHandle(tls, p), wrflag, btreeMemoryHandle(tls, pSchemaVersion))
 }
 
 func _sqlite3BtreeIncrVacuum(tls *libc.TLS, p uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeIncrVacuum(tls, p)
+	return storageEngine().BtreeIncrVacuum(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeCommitPhaseOne(tls *libc.TLS, p uintptr, zSuperJrnl uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeCommitPhaseOne(tls, p, zSuperJrnl)
+	return storageEngine().BtreeCommitPhaseOne(btreeContext(tls), btreeHandle(tls, p), btreeCStringHandle(tls, zSuperJrnl))
 }
 
 func _sqlite3BtreeCommitPhaseTwo(tls *libc.TLS, p uintptr, bCleanup int32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeCommitPhaseTwo(tls, p, bCleanup)
+	return storageEngine().BtreeCommitPhaseTwo(btreeContext(tls), btreeHandle(tls, p), bCleanup)
 }
 
 func _sqlite3BtreeCommit(tls *libc.TLS, p uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeCommit(tls, p)
+	return storageEngine().BtreeCommit(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeTripAllCursors(tls *libc.TLS, pBtree uintptr, errCode int32, writeOnly int32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeTripAllCursors(tls, pBtree, errCode, writeOnly)
+	return storageEngine().BtreeTripAllCursors(btreeContext(tls), btreeHandle(tls, pBtree), errCode, writeOnly)
 }
 
 func _sqlite3BtreeRollback(tls *libc.TLS, p uintptr, tripCode int32, writeOnly int32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeRollback(tls, p, tripCode, writeOnly)
+	return storageEngine().BtreeRollback(btreeContext(tls), btreeHandle(tls, p), tripCode, writeOnly)
 }
 
 func _sqlite3BtreeBeginStmt(tls *libc.TLS, p uintptr, iStatement int32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeBeginStmt(tls, p, iStatement)
+	return storageEngine().BtreeBeginStmt(btreeContext(tls), btreeHandle(tls, p), iStatement)
 }
 
 func _sqlite3BtreeSavepoint(tls *libc.TLS, p uintptr, op int32, iSavepoint int32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeSavepoint(tls, p, op, iSavepoint)
+	return storageEngine().BtreeSavepoint(btreeContext(tls), btreeHandle(tls, p), op, iSavepoint)
 }
 
 func _sqlite3BtreeCursor(tls *libc.TLS, p uintptr, iTable TPgno, wrFlag int32, pKeyInfo uintptr, pCur uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeCursor(tls, p, iTable, wrFlag, pKeyInfo, pCur)
+	return storageEngine().BtreeCursor(btreeContext(tls), btreeHandle(tls, p), uint32(iTable), wrFlag, btreeKeyInfoHandle(tls, pKeyInfo), btreeCursorHandle(tls, pCur))
 }
 
 func _sqlite3BtreeCursorSize(tls *libc.TLS) (r int32) {
-	return currentStorageEngine._sqlite3BtreeCursorSize(tls)
+	return storageEngine().BtreeCursorSize(btreeContext(tls))
 }
 
 func _sqlite3BtreeCursorZero(tls *libc.TLS, p uintptr) {
-	currentStorageEngine._sqlite3BtreeCursorZero(tls, p)
+	storageEngine().BtreeCursorZero(btreeContext(tls), btreeCursorHandle(tls, p))
 }
 
 func _sqlite3BtreeCloseCursor(tls *libc.TLS, pCur uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeCloseCursor(tls, pCur)
+	return storageEngine().BtreeCloseCursor(btreeContext(tls), btreeCursorHandle(tls, pCur))
 }
 
 func _sqlite3BtreeCursorIsValidNN(tls *libc.TLS, pCur uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeCursorIsValidNN(tls, pCur)
+	return storageEngine().BtreeCursorIsValidNN(btreeContext(tls), btreeCursorHandle(tls, pCur))
 }
 
 func _sqlite3BtreeIntegerKey(tls *libc.TLS, pCur uintptr) (r Ti64) {
-	return currentStorageEngine._sqlite3BtreeIntegerKey(tls, pCur)
+	return Ti64(storageEngine().BtreeIntegerKey(btreeContext(tls), btreeCursorHandle(tls, pCur)))
 }
 
 func _sqlite3BtreeCursorPin(tls *libc.TLS, pCur uintptr) {
-	currentStorageEngine._sqlite3BtreeCursorPin(tls, pCur)
+	storageEngine().BtreeCursorPin(btreeContext(tls), btreeCursorHandle(tls, pCur))
 }
 
 func _sqlite3BtreeCursorUnpin(tls *libc.TLS, pCur uintptr) {
-	currentStorageEngine._sqlite3BtreeCursorUnpin(tls, pCur)
+	storageEngine().BtreeCursorUnpin(btreeContext(tls), btreeCursorHandle(tls, pCur))
 }
 
 func _sqlite3BtreeOffset(tls *libc.TLS, pCur uintptr) (r Ti64) {
-	return currentStorageEngine._sqlite3BtreeOffset(tls, pCur)
+	return Ti64(storageEngine().BtreeOffset(btreeContext(tls), btreeCursorHandle(tls, pCur)))
 }
 
 func _sqlite3BtreePayloadSize(tls *libc.TLS, pCur uintptr) (r Tu32) {
-	return currentStorageEngine._sqlite3BtreePayloadSize(tls, pCur)
+	return Tu32(storageEngine().BtreePayloadSize(btreeContext(tls), btreeCursorHandle(tls, pCur)))
 }
 
 func _sqlite3BtreeMaxRecordSize(tls *libc.TLS, pCur uintptr) (r Tsqlite3_int64) {
-	return currentStorageEngine._sqlite3BtreeMaxRecordSize(tls, pCur)
+	return Tsqlite3_int64(storageEngine().BtreeMaxRecordSize(btreeContext(tls), btreeCursorHandle(tls, pCur)))
 }
 
 func _sqlite3BtreePayload(tls *libc.TLS, pCur uintptr, offset Tu32, amt Tu32, pBuf uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreePayload(tls, pCur, offset, amt, pBuf)
+	return storageEngine().BtreePayload(btreeContext(tls), btreeCursorHandle(tls, pCur), uint32(offset), uint32(amt), btreeMemoryHandle(tls, pBuf))
 }
 
 func _sqlite3BtreePayloadChecked(tls *libc.TLS, pCur uintptr, offset Tu32, amt Tu32, pBuf uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreePayloadChecked(tls, pCur, offset, amt, pBuf)
+	return storageEngine().BtreePayloadChecked(btreeContext(tls), btreeCursorHandle(tls, pCur), uint32(offset), uint32(amt), btreeMemoryHandle(tls, pBuf))
 }
 
 func _sqlite3BtreePayloadFetch(tls *libc.TLS, pCur uintptr, pAmt uintptr) (r uintptr) {
-	return currentStorageEngine._sqlite3BtreePayloadFetch(tls, pCur, pAmt)
+	return storageEngine().BtreePayloadFetch(btreeContext(tls), btreeCursorHandle(tls, pCur), btreeMemoryHandle(tls, pAmt)).ptr
 }
 
 func _sqlite3BtreeFirst(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeFirst(tls, pCur, pRes)
+	return storageEngine().BtreeFirst(btreeContext(tls), btreeCursorHandle(tls, pCur), btreeMemoryHandle(tls, pRes))
 }
 
 func _sqlite3BtreeIsEmpty(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeIsEmpty(tls, pCur, pRes)
+	return storageEngine().(StorageEngineBtreeIsEmpty).BtreeIsEmpty(btreeContext(tls), btreeCursorHandle(tls, pCur), btreeMemoryHandle(tls, pRes))
 }
 
 func _sqlite3BtreeLast(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeLast(tls, pCur, pRes)
+	return storageEngine().BtreeLast(btreeContext(tls), btreeCursorHandle(tls, pCur), btreeMemoryHandle(tls, pRes))
 }
 
 func _sqlite3BtreeTableMoveto(tls *libc.TLS, pCur uintptr, intKey Ti64, biasRight int32, pRes uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeTableMoveto(tls, pCur, intKey, biasRight, pRes)
+	return storageEngine().BtreeTableMoveto(btreeContext(tls), btreeCursorHandle(tls, pCur), int64(intKey), biasRight, btreeMemoryHandle(tls, pRes))
 }
 
 func _sqlite3BtreeIndexMoveto(tls *libc.TLS, pCur uintptr, pIdxKey uintptr, pRes uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeIndexMoveto(tls, pCur, pIdxKey, pRes)
+	return storageEngine().BtreeIndexMoveto(btreeContext(tls), btreeCursorHandle(tls, pCur), btreeIndexKeyHandle(tls, pIdxKey), btreeMemoryHandle(tls, pRes))
 }
 
 func _sqlite3BtreeEof(tls *libc.TLS, pCur uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeEof(tls, pCur)
+	return storageEngine().BtreeEof(btreeContext(tls), btreeCursorHandle(tls, pCur))
 }
 
 func _sqlite3BtreeRowCountEst(tls *libc.TLS, pCur uintptr) (r Ti64) {
-	return currentStorageEngine._sqlite3BtreeRowCountEst(tls, pCur)
+	return Ti64(storageEngine().BtreeRowCountEst(btreeContext(tls), btreeCursorHandle(tls, pCur)))
 }
 
 func _sqlite3BtreeNext(tls *libc.TLS, pCur uintptr, flags int32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeNext(tls, pCur, flags)
+	return storageEngine().BtreeNext(btreeContext(tls), btreeCursorHandle(tls, pCur), flags)
 }
 
 func _sqlite3BtreePrevious(tls *libc.TLS, pCur uintptr, flags int32) (r int32) {
-	return currentStorageEngine._sqlite3BtreePrevious(tls, pCur, flags)
+	return storageEngine().BtreePrevious(btreeContext(tls), btreeCursorHandle(tls, pCur), flags)
 }
 
 func _sqlite3BtreeInsert(tls *libc.TLS, pCur uintptr, pX uintptr, flags int32, seekResult int32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeInsert(tls, pCur, pX, flags, seekResult)
+	return storageEngine().BtreeInsert(btreeContext(tls), btreeCursorHandle(tls, pCur), btreePayloadHandle(tls, pX), flags, seekResult)
 }
 
 func _sqlite3BtreeTransferRow(tls *libc.TLS, pDest uintptr, pSrc uintptr, iKey Ti64) (r int32) {
-	return currentStorageEngine._sqlite3BtreeTransferRow(tls, pDest, pSrc, iKey)
+	return storageEngine().BtreeTransferRow(btreeContext(tls), btreeCursorHandle(tls, pDest), btreeCursorHandle(tls, pSrc), int64(iKey))
 }
 
 func _sqlite3BtreeDelete(tls *libc.TLS, pCur uintptr, flags Tu8) (r int32) {
-	return currentStorageEngine._sqlite3BtreeDelete(tls, pCur, flags)
+	return storageEngine().BtreeDelete(btreeContext(tls), btreeCursorHandle(tls, pCur), uint8(flags))
 }
 
 func _sqlite3BtreeCreateTable(tls *libc.TLS, p uintptr, piTable uintptr, flags int32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeCreateTable(tls, p, piTable, flags)
+	return storageEngine().BtreeCreateTable(btreeContext(tls), btreeHandle(tls, p), btreeMemoryHandle(tls, piTable), flags)
 }
 
 func _sqlite3BtreeClearTable(tls *libc.TLS, p uintptr, iTable int32, pnChange uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeClearTable(tls, p, iTable, pnChange)
+	return storageEngine().BtreeClearTable(btreeContext(tls), btreeHandle(tls, p), iTable, btreeMemoryHandle(tls, pnChange))
 }
 
 func _sqlite3BtreeClearTableOfCursor(tls *libc.TLS, pCur uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeClearTableOfCursor(tls, pCur)
+	return storageEngine().BtreeClearTableOfCursor(btreeContext(tls), btreeCursorHandle(tls, pCur))
 }
 
 func _sqlite3BtreeDropTable(tls *libc.TLS, p uintptr, iTable int32, piMoved uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeDropTable(tls, p, iTable, piMoved)
+	return storageEngine().BtreeDropTable(btreeContext(tls), btreeHandle(tls, p), iTable, btreeMemoryHandle(tls, piMoved))
 }
 
 func _sqlite3BtreeGetMeta(tls *libc.TLS, p uintptr, idx int32, pMeta uintptr) {
-	currentStorageEngine._sqlite3BtreeGetMeta(tls, p, idx, pMeta)
+	storageEngine().BtreeGetMeta(btreeContext(tls), btreeHandle(tls, p), idx, btreeMemoryHandle(tls, pMeta))
 }
 
 func _sqlite3BtreeUpdateMeta(tls *libc.TLS, p uintptr, idx int32, iMeta Tu32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeUpdateMeta(tls, p, idx, iMeta)
+	return storageEngine().BtreeUpdateMeta(btreeContext(tls), btreeHandle(tls, p), idx, uint32(iMeta))
 }
 
 func _sqlite3BtreeCount(tls *libc.TLS, db uintptr, pCur uintptr, pnEntry uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeCount(tls, db, pCur, pnEntry)
+	return storageEngine().BtreeCount(btreeContext(tls), sqliteHandle(tls, db), btreeCursorHandle(tls, pCur), btreeMemoryHandle(tls, pnEntry))
 }
 
 func _sqlite3BtreePager(tls *libc.TLS, p uintptr) (r uintptr) {
-	return currentStorageEngine._sqlite3BtreePager(tls, p)
+	return storageEngine().BtreePager(btreeContext(tls), btreeHandle(tls, p)).ptr
 }
 
 func _sqlite3BtreeIntegrityCheck(tls *libc.TLS, db uintptr, p uintptr, aRoot uintptr, aCnt uintptr, nRoot int32, mxErr int32, pnErr uintptr, pzOut uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeIntegrityCheck(tls, db, p, aRoot, aCnt, nRoot, mxErr, pnErr, pzOut)
+	return storageEngine().(StorageEngineBtreeIntegrityCheck).BtreeIntegrityCheck(btreeContext(tls), sqliteHandle(tls, db), btreeHandle(tls, p), btreeMemoryHandle(tls, aRoot), btreeMemoryHandle(tls, aCnt), nRoot, mxErr, btreeMemoryHandle(tls, pnErr), btreeMemoryHandle(tls, pzOut))
 }
 
 func _sqlite3BtreeGetFilename(tls *libc.TLS, p uintptr) (r uintptr) {
-	return currentStorageEngine._sqlite3BtreeGetFilename(tls, p)
+	return storageEngine().BtreeGetFilename(btreeContext(tls), btreeHandle(tls, p)).ptr
 }
 
 func _sqlite3BtreeGetJournalname(tls *libc.TLS, p uintptr) (r uintptr) {
-	return currentStorageEngine._sqlite3BtreeGetJournalname(tls, p)
+	return storageEngine().BtreeGetJournalname(btreeContext(tls), btreeHandle(tls, p)).ptr
 }
 
 func _sqlite3BtreeTxnState(tls *libc.TLS, p uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeTxnState(tls, p)
+	return storageEngine().BtreeTxnState(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeCheckpoint(tls *libc.TLS, p uintptr, eMode int32, pnLog uintptr, pnCkpt uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeCheckpoint(tls, p, eMode, pnLog, pnCkpt)
+	return storageEngine().BtreeCheckpoint(btreeContext(tls), btreeHandle(tls, p), eMode, btreeMemoryHandle(tls, pnLog), btreeMemoryHandle(tls, pnCkpt))
 }
 
 func _sqlite3BtreeIsInBackup(tls *libc.TLS, p uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeIsInBackup(tls, p)
+	return storageEngine().BtreeIsInBackup(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeSchema(tls *libc.TLS, p uintptr, nBytes int32, __ccgo_fp_xFree uintptr) (r uintptr) {
-	return currentStorageEngine._sqlite3BtreeSchema(tls, p, nBytes, __ccgo_fp_xFree)
+	return storageEngine().BtreeSchema(btreeContext(tls), btreeHandle(tls, p), nBytes, btreeFunctionHandle(tls, __ccgo_fp_xFree)).ptr
 }
 
 func _sqlite3BtreeSchemaLocked(tls *libc.TLS, p uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeSchemaLocked(tls, p)
+	return storageEngine().BtreeSchemaLocked(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeLockTable(tls *libc.TLS, p uintptr, iTab int32, isWriteLock Tu8) (r int32) {
-	return currentStorageEngine._sqlite3BtreeLockTable(tls, p, iTab, isWriteLock)
+	return storageEngine().BtreeLockTable(btreeContext(tls), btreeHandle(tls, p), iTab, uint8(isWriteLock))
 }
 
 func _sqlite3BtreePutData(tls *libc.TLS, pCsr uintptr, offset Tu32, amt Tu32, z uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreePutData(tls, pCsr, offset, amt, z)
+	return storageEngine().BtreePutData(btreeContext(tls), btreeCursorHandle(tls, pCsr), uint32(offset), uint32(amt), btreeMemoryHandle(tls, z))
 }
 
 func _sqlite3BtreeIncrblobCursor(tls *libc.TLS, pCur uintptr) {
-	currentStorageEngine._sqlite3BtreeIncrblobCursor(tls, pCur)
+	storageEngine().BtreeIncrblobCursor(btreeContext(tls), btreeCursorHandle(tls, pCur))
 }
 
 func _sqlite3BtreeSetVersion(tls *libc.TLS, pBtree uintptr, iVersion int32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeSetVersion(tls, pBtree, iVersion)
+	return storageEngine().BtreeSetVersion(btreeContext(tls), btreeHandle(tls, pBtree), iVersion)
 }
 
 func _sqlite3BtreeCursorHasHint(tls *libc.TLS, pCsr uintptr, mask uint32) (r int32) {
-	return currentStorageEngine._sqlite3BtreeCursorHasHint(tls, pCsr, mask)
+	return storageEngine().BtreeCursorHasHint(btreeContext(tls), btreeCursorHandle(tls, pCsr), mask)
 }
 
 func _sqlite3BtreeIsReadonly(tls *libc.TLS, p uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeIsReadonly(tls, p)
+	return storageEngine().BtreeIsReadonly(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeClearCache(tls *libc.TLS, p uintptr) {
-	currentStorageEngine._sqlite3BtreeClearCache(tls, p)
+	storageEngine().(StorageEngineBtreeClearCache).BtreeClearCache(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeSharable(tls *libc.TLS, p uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeSharable(tls, p)
+	return storageEngine().BtreeSharable(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeConnectionCount(tls *libc.TLS, p uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeConnectionCount(tls, p)
+	return storageEngine().BtreeConnectionCount(btreeContext(tls), btreeHandle(tls, p))
 }
 
 func _sqlite3BtreeCopyFile(tls *libc.TLS, pTo uintptr, pFrom uintptr) (r int32) {
-	return currentStorageEngine._sqlite3BtreeCopyFile(tls, pTo, pFrom)
+	return storageEngine().BtreeCopyFile(btreeContext(tls), btreeHandle(tls, pTo), btreeHandle(tls, pFrom))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeEnter(tls *libc.TLS, p uintptr) {
-	_nativeSqlite3BtreeEnter(tls, p)
+func (nativeBtreeStorageEngine) BtreeEnter(ctx BtreeContext, p BtreeHandle) {
+	_nativeSqlite3BtreeEnter(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeLeave(tls *libc.TLS, p uintptr) {
-	_nativeSqlite3BtreeLeave(tls, p)
+func (nativeBtreeStorageEngine) BtreeLeave(ctx BtreeContext, p BtreeHandle) {
+	_nativeSqlite3BtreeLeave(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeEnterAll(tls *libc.TLS, db uintptr) {
-	_nativeSqlite3BtreeEnterAll(tls, db)
+func (nativeBtreeStorageEngine) BtreeEnterAll(ctx BtreeContext, db SQLiteHandle) {
+	_nativeSqlite3BtreeEnterAll(ctx.tls, db.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeLeaveAll(tls *libc.TLS, db uintptr) {
-	_nativeSqlite3BtreeLeaveAll(tls, db)
+func (nativeBtreeStorageEngine) BtreeLeaveAll(ctx BtreeContext, db SQLiteHandle) {
+	_nativeSqlite3BtreeLeaveAll(ctx.tls, db.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeEnterCursor(tls *libc.TLS, pCur uintptr) {
-	_nativeSqlite3BtreeEnterCursor(tls, pCur)
+func (nativeBtreeStorageEngine) BtreeEnterCursor(ctx BtreeContext, pCur BtreeCursorHandle) {
+	_nativeSqlite3BtreeEnterCursor(ctx.tls, pCur.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeLeaveCursor(tls *libc.TLS, pCur uintptr) {
-	_nativeSqlite3BtreeLeaveCursor(tls, pCur)
+func (nativeBtreeStorageEngine) BtreeLeaveCursor(ctx BtreeContext, pCur BtreeCursorHandle) {
+	_nativeSqlite3BtreeLeaveCursor(ctx.tls, pCur.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeClearCursor(tls *libc.TLS, pCur uintptr) {
-	_nativeSqlite3BtreeClearCursor(tls, pCur)
+func (nativeBtreeStorageEngine) BtreeClearCursor(ctx BtreeContext, pCur BtreeCursorHandle) {
+	_nativeSqlite3BtreeClearCursor(ctx.tls, pCur.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCursorHasMoved(tls *libc.TLS, pCur uintptr) (r int32) {
-	return _nativeSqlite3BtreeCursorHasMoved(tls, pCur)
+func (nativeBtreeStorageEngine) BtreeCursorHasMoved(ctx BtreeContext, pCur BtreeCursorHandle) (r int32) {
+	return _nativeSqlite3BtreeCursorHasMoved(ctx.tls, pCur.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeFakeValidCursor(tls *libc.TLS) (r uintptr) {
-	return _nativeSqlite3BtreeFakeValidCursor(tls)
+func (nativeBtreeStorageEngine) BtreeFakeValidCursor(ctx BtreeContext) (r BtreeCursorHandle) {
+	return btreeCursorHandle(ctx.tls, _nativeSqlite3BtreeFakeValidCursor(ctx.tls))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCursorRestore(tls *libc.TLS, pCur uintptr, pDifferentRow uintptr) (r int32) {
-	return _nativeSqlite3BtreeCursorRestore(tls, pCur, pDifferentRow)
+func (nativeBtreeStorageEngine) BtreeCursorRestore(ctx BtreeContext, pCur BtreeCursorHandle, pDifferentRow BtreeMemoryHandle) (r int32) {
+	return _nativeSqlite3BtreeCursorRestore(ctx.tls, pCur.ptr, pDifferentRow.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCursorHintFlags(tls *libc.TLS, pCur uintptr, x uint32) {
-	_nativeSqlite3BtreeCursorHintFlags(tls, pCur, x)
+func (nativeBtreeStorageEngine) BtreeCursorHintFlags(ctx BtreeContext, pCur BtreeCursorHandle, x uint32) {
+	_nativeSqlite3BtreeCursorHintFlags(ctx.tls, pCur.ptr, x)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeLastPage(tls *libc.TLS, p uintptr) (r TPgno) {
-	return _nativeSqlite3BtreeLastPage(tls, p)
+func (nativeBtreeStorageEngine) BtreeLastPage(ctx BtreeContext, p BtreeHandle) (r uint32) {
+	return uint32(_nativeSqlite3BtreeLastPage(ctx.tls, p.ptr))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeOpen(tls *libc.TLS, pVfs uintptr, zFilename uintptr, db uintptr, ppBtree uintptr, flags int32, vfsFlags int32) (r int32) {
-	return _nativeSqlite3BtreeOpen(tls, pVfs, zFilename, db, ppBtree, flags, vfsFlags)
+func (nativeBtreeStorageEngine) BtreeOpen(ctx BtreeContext, pVfs BtreeVFSHandle, zFilename BtreeCStringHandle, db SQLiteHandle, ppBtree BtreeMemoryHandle, flags int32, vfsFlags int32) (r int32) {
+	return _nativeSqlite3BtreeOpen(ctx.tls, pVfs.ptr, zFilename.ptr, db.ptr, ppBtree.ptr, flags, vfsFlags)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeClose(tls *libc.TLS, p uintptr) (r int32) {
-	return _nativeSqlite3BtreeClose(tls, p)
+func (nativeBtreeStorageEngine) BtreeClose(ctx BtreeContext, p BtreeHandle) (r int32) {
+	return _nativeSqlite3BtreeClose(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeSetCacheSize(tls *libc.TLS, p uintptr, mxPage int32) (r int32) {
-	return _nativeSqlite3BtreeSetCacheSize(tls, p, mxPage)
+func (nativeBtreeStorageEngine) BtreeSetCacheSize(ctx BtreeContext, p BtreeHandle, mxPage int32) (r int32) {
+	return _nativeSqlite3BtreeSetCacheSize(ctx.tls, p.ptr, mxPage)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeSetSpillSize(tls *libc.TLS, p uintptr, mxPage int32) (r int32) {
-	return _nativeSqlite3BtreeSetSpillSize(tls, p, mxPage)
+func (nativeBtreeStorageEngine) BtreeSetSpillSize(ctx BtreeContext, p BtreeHandle, mxPage int32) (r int32) {
+	return _nativeSqlite3BtreeSetSpillSize(ctx.tls, p.ptr, mxPage)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeSetPagerFlags(tls *libc.TLS, p uintptr, pgFlags uint32) (r int32) {
-	return _nativeSqlite3BtreeSetPagerFlags(tls, p, pgFlags)
+func (nativeBtreeStorageEngine) BtreeSetPagerFlags(ctx BtreeContext, p BtreeHandle, pgFlags uint32) (r int32) {
+	return _nativeSqlite3BtreeSetPagerFlags(ctx.tls, p.ptr, pgFlags)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeSetPageSize(tls *libc.TLS, p uintptr, pageSize int32, nReserve int32, iFix int32) (r int32) {
-	return _nativeSqlite3BtreeSetPageSize(tls, p, pageSize, nReserve, iFix)
+func (nativeBtreeStorageEngine) BtreeSetPageSize(ctx BtreeContext, p BtreeHandle, pageSize int32, nReserve int32, iFix int32) (r int32) {
+	return _nativeSqlite3BtreeSetPageSize(ctx.tls, p.ptr, pageSize, nReserve, iFix)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeGetPageSize(tls *libc.TLS, p uintptr) (r int32) {
-	return _nativeSqlite3BtreeGetPageSize(tls, p)
+func (nativeBtreeStorageEngine) BtreeGetPageSize(ctx BtreeContext, p BtreeHandle) (r int32) {
+	return _nativeSqlite3BtreeGetPageSize(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeGetReserveNoMutex(tls *libc.TLS, p uintptr) (r int32) {
-	return _nativeSqlite3BtreeGetReserveNoMutex(tls, p)
+func (nativeBtreeStorageEngine) BtreeGetReserveNoMutex(ctx BtreeContext, p BtreeHandle) (r int32) {
+	return _nativeSqlite3BtreeGetReserveNoMutex(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeGetRequestedReserve(tls *libc.TLS, p uintptr) (r int32) {
-	return _nativeSqlite3BtreeGetRequestedReserve(tls, p)
+func (nativeBtreeStorageEngine) BtreeGetRequestedReserve(ctx BtreeContext, p BtreeHandle) (r int32) {
+	return _nativeSqlite3BtreeGetRequestedReserve(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeMaxPageCount(tls *libc.TLS, p uintptr, mxPage TPgno) (r TPgno) {
-	return _nativeSqlite3BtreeMaxPageCount(tls, p, mxPage)
+func (nativeBtreeStorageEngine) BtreeMaxPageCount(ctx BtreeContext, p BtreeHandle, mxPage uint32) (r uint32) {
+	return uint32(_nativeSqlite3BtreeMaxPageCount(ctx.tls, p.ptr, TPgno(mxPage)))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeSecureDelete(tls *libc.TLS, p uintptr, newFlag int32) (r int32) {
-	return _nativeSqlite3BtreeSecureDelete(tls, p, newFlag)
+func (nativeBtreeStorageEngine) BtreeSecureDelete(ctx BtreeContext, p BtreeHandle, newFlag int32) (r int32) {
+	return _nativeSqlite3BtreeSecureDelete(ctx.tls, p.ptr, newFlag)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeSetAutoVacuum(tls *libc.TLS, p uintptr, autoVacuum int32) (r int32) {
-	return _nativeSqlite3BtreeSetAutoVacuum(tls, p, autoVacuum)
+func (nativeBtreeStorageEngine) BtreeSetAutoVacuum(ctx BtreeContext, p BtreeHandle, autoVacuum int32) (r int32) {
+	return _nativeSqlite3BtreeSetAutoVacuum(ctx.tls, p.ptr, autoVacuum)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeGetAutoVacuum(tls *libc.TLS, p uintptr) (r int32) {
-	return _nativeSqlite3BtreeGetAutoVacuum(tls, p)
+func (nativeBtreeStorageEngine) BtreeGetAutoVacuum(ctx BtreeContext, p BtreeHandle) (r int32) {
+	return _nativeSqlite3BtreeGetAutoVacuum(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeNewDb(tls *libc.TLS, p uintptr) (r int32) {
-	return _nativeSqlite3BtreeNewDb(tls, p)
+func (nativeBtreeStorageEngine) BtreeNewDb(ctx BtreeContext, p BtreeHandle) (r int32) {
+	return _nativeSqlite3BtreeNewDb(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeBeginTrans(tls *libc.TLS, p uintptr, wrflag int32, pSchemaVersion uintptr) (r int32) {
-	return _nativeSqlite3BtreeBeginTrans(tls, p, wrflag, pSchemaVersion)
+func (nativeBtreeStorageEngine) BtreeBeginTrans(ctx BtreeContext, p BtreeHandle, wrflag int32, pSchemaVersion BtreeMemoryHandle) (r int32) {
+	return _nativeSqlite3BtreeBeginTrans(ctx.tls, p.ptr, wrflag, pSchemaVersion.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeIncrVacuum(tls *libc.TLS, p uintptr) (r int32) {
-	return _nativeSqlite3BtreeIncrVacuum(tls, p)
+func (nativeBtreeStorageEngine) BtreeIncrVacuum(ctx BtreeContext, p BtreeHandle) (r int32) {
+	return _nativeSqlite3BtreeIncrVacuum(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCommitPhaseOne(tls *libc.TLS, p uintptr, zSuperJrnl uintptr) (r int32) {
-	return _nativeSqlite3BtreeCommitPhaseOne(tls, p, zSuperJrnl)
+func (nativeBtreeStorageEngine) BtreeCommitPhaseOne(ctx BtreeContext, p BtreeHandle, zSuperJrnl BtreeCStringHandle) (r int32) {
+	return _nativeSqlite3BtreeCommitPhaseOne(ctx.tls, p.ptr, zSuperJrnl.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCommitPhaseTwo(tls *libc.TLS, p uintptr, bCleanup int32) (r int32) {
-	return _nativeSqlite3BtreeCommitPhaseTwo(tls, p, bCleanup)
+func (nativeBtreeStorageEngine) BtreeCommitPhaseTwo(ctx BtreeContext, p BtreeHandle, bCleanup int32) (r int32) {
+	return _nativeSqlite3BtreeCommitPhaseTwo(ctx.tls, p.ptr, bCleanup)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCommit(tls *libc.TLS, p uintptr) (r int32) {
-	return _nativeSqlite3BtreeCommit(tls, p)
+func (nativeBtreeStorageEngine) BtreeCommit(ctx BtreeContext, p BtreeHandle) (r int32) {
+	return _nativeSqlite3BtreeCommit(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeTripAllCursors(tls *libc.TLS, pBtree uintptr, errCode int32, writeOnly int32) (r int32) {
-	return _nativeSqlite3BtreeTripAllCursors(tls, pBtree, errCode, writeOnly)
+func (nativeBtreeStorageEngine) BtreeTripAllCursors(ctx BtreeContext, pBtree BtreeHandle, errCode int32, writeOnly int32) (r int32) {
+	return _nativeSqlite3BtreeTripAllCursors(ctx.tls, pBtree.ptr, errCode, writeOnly)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeRollback(tls *libc.TLS, p uintptr, tripCode int32, writeOnly int32) (r int32) {
-	return _nativeSqlite3BtreeRollback(tls, p, tripCode, writeOnly)
+func (nativeBtreeStorageEngine) BtreeRollback(ctx BtreeContext, p BtreeHandle, tripCode int32, writeOnly int32) (r int32) {
+	return _nativeSqlite3BtreeRollback(ctx.tls, p.ptr, tripCode, writeOnly)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeBeginStmt(tls *libc.TLS, p uintptr, iStatement int32) (r int32) {
-	return _nativeSqlite3BtreeBeginStmt(tls, p, iStatement)
+func (nativeBtreeStorageEngine) BtreeBeginStmt(ctx BtreeContext, p BtreeHandle, iStatement int32) (r int32) {
+	return _nativeSqlite3BtreeBeginStmt(ctx.tls, p.ptr, iStatement)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeSavepoint(tls *libc.TLS, p uintptr, op int32, iSavepoint int32) (r int32) {
-	return _nativeSqlite3BtreeSavepoint(tls, p, op, iSavepoint)
+func (nativeBtreeStorageEngine) BtreeSavepoint(ctx BtreeContext, p BtreeHandle, op int32, iSavepoint int32) (r int32) {
+	return _nativeSqlite3BtreeSavepoint(ctx.tls, p.ptr, op, iSavepoint)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCursor(tls *libc.TLS, p uintptr, iTable TPgno, wrFlag int32, pKeyInfo uintptr, pCur uintptr) (r int32) {
-	return _nativeSqlite3BtreeCursor(tls, p, iTable, wrFlag, pKeyInfo, pCur)
+func (nativeBtreeStorageEngine) BtreeCursor(ctx BtreeContext, p BtreeHandle, iTable uint32, wrFlag int32, pKeyInfo BtreeKeyInfoHandle, pCur BtreeCursorHandle) (r int32) {
+	return _nativeSqlite3BtreeCursor(ctx.tls, p.ptr, TPgno(iTable), wrFlag, pKeyInfo.ptr, pCur.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCursorSize(tls *libc.TLS) (r int32) {
-	return _nativeSqlite3BtreeCursorSize(tls)
+func (nativeBtreeStorageEngine) BtreeCursorSize(ctx BtreeContext) (r int32) {
+	return _nativeSqlite3BtreeCursorSize(ctx.tls)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCursorZero(tls *libc.TLS, p uintptr) {
-	_nativeSqlite3BtreeCursorZero(tls, p)
+func (nativeBtreeStorageEngine) BtreeCursorZero(ctx BtreeContext, p BtreeCursorHandle) {
+	_nativeSqlite3BtreeCursorZero(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCloseCursor(tls *libc.TLS, pCur uintptr) (r int32) {
-	return _nativeSqlite3BtreeCloseCursor(tls, pCur)
+func (nativeBtreeStorageEngine) BtreeCloseCursor(ctx BtreeContext, pCur BtreeCursorHandle) (r int32) {
+	return _nativeSqlite3BtreeCloseCursor(ctx.tls, pCur.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCursorIsValidNN(tls *libc.TLS, pCur uintptr) (r int32) {
-	return _nativeSqlite3BtreeCursorIsValidNN(tls, pCur)
+func (nativeBtreeStorageEngine) BtreeCursorIsValidNN(ctx BtreeContext, pCur BtreeCursorHandle) (r int32) {
+	return _nativeSqlite3BtreeCursorIsValidNN(ctx.tls, pCur.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeIntegerKey(tls *libc.TLS, pCur uintptr) (r Ti64) {
-	return _nativeSqlite3BtreeIntegerKey(tls, pCur)
+func (nativeBtreeStorageEngine) BtreeIntegerKey(ctx BtreeContext, pCur BtreeCursorHandle) (r int64) {
+	return int64(_nativeSqlite3BtreeIntegerKey(ctx.tls, pCur.ptr))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCursorPin(tls *libc.TLS, pCur uintptr) {
-	_nativeSqlite3BtreeCursorPin(tls, pCur)
+func (nativeBtreeStorageEngine) BtreeCursorPin(ctx BtreeContext, pCur BtreeCursorHandle) {
+	_nativeSqlite3BtreeCursorPin(ctx.tls, pCur.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCursorUnpin(tls *libc.TLS, pCur uintptr) {
-	_nativeSqlite3BtreeCursorUnpin(tls, pCur)
+func (nativeBtreeStorageEngine) BtreeCursorUnpin(ctx BtreeContext, pCur BtreeCursorHandle) {
+	_nativeSqlite3BtreeCursorUnpin(ctx.tls, pCur.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeOffset(tls *libc.TLS, pCur uintptr) (r Ti64) {
-	return _nativeSqlite3BtreeOffset(tls, pCur)
+func (nativeBtreeStorageEngine) BtreeOffset(ctx BtreeContext, pCur BtreeCursorHandle) (r int64) {
+	return int64(_nativeSqlite3BtreeOffset(ctx.tls, pCur.ptr))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreePayloadSize(tls *libc.TLS, pCur uintptr) (r Tu32) {
-	return _nativeSqlite3BtreePayloadSize(tls, pCur)
+func (nativeBtreeStorageEngine) BtreePayloadSize(ctx BtreeContext, pCur BtreeCursorHandle) (r uint32) {
+	return uint32(_nativeSqlite3BtreePayloadSize(ctx.tls, pCur.ptr))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeMaxRecordSize(tls *libc.TLS, pCur uintptr) (r Tsqlite3_int64) {
-	return _nativeSqlite3BtreeMaxRecordSize(tls, pCur)
+func (nativeBtreeStorageEngine) BtreeMaxRecordSize(ctx BtreeContext, pCur BtreeCursorHandle) (r int64) {
+	return int64(_nativeSqlite3BtreeMaxRecordSize(ctx.tls, pCur.ptr))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreePayload(tls *libc.TLS, pCur uintptr, offset Tu32, amt Tu32, pBuf uintptr) (r int32) {
-	return _nativeSqlite3BtreePayload(tls, pCur, offset, amt, pBuf)
+func (nativeBtreeStorageEngine) BtreePayload(ctx BtreeContext, pCur BtreeCursorHandle, offset uint32, amt uint32, pBuf BtreeMemoryHandle) (r int32) {
+	return _nativeSqlite3BtreePayload(ctx.tls, pCur.ptr, Tu32(offset), Tu32(amt), pBuf.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreePayloadChecked(tls *libc.TLS, pCur uintptr, offset Tu32, amt Tu32, pBuf uintptr) (r int32) {
-	return _nativeSqlite3BtreePayloadChecked(tls, pCur, offset, amt, pBuf)
+func (nativeBtreeStorageEngine) BtreePayloadChecked(ctx BtreeContext, pCur BtreeCursorHandle, offset uint32, amt uint32, pBuf BtreeMemoryHandle) (r int32) {
+	return _nativeSqlite3BtreePayloadChecked(ctx.tls, pCur.ptr, Tu32(offset), Tu32(amt), pBuf.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreePayloadFetch(tls *libc.TLS, pCur uintptr, pAmt uintptr) (r uintptr) {
-	return _nativeSqlite3BtreePayloadFetch(tls, pCur, pAmt)
+func (nativeBtreeStorageEngine) BtreePayloadFetch(ctx BtreeContext, pCur BtreeCursorHandle, pAmt BtreeMemoryHandle) (r BtreeMemoryHandle) {
+	return btreeMemoryHandle(ctx.tls, _nativeSqlite3BtreePayloadFetch(ctx.tls, pCur.ptr, pAmt.ptr))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeFirst(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32) {
-	return _nativeSqlite3BtreeFirst(tls, pCur, pRes)
+func (nativeBtreeStorageEngine) BtreeFirst(ctx BtreeContext, pCur BtreeCursorHandle, pRes BtreeMemoryHandle) (r int32) {
+	return _nativeSqlite3BtreeFirst(ctx.tls, pCur.ptr, pRes.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeIsEmpty(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32) {
-	return _nativeSqlite3BtreeIsEmpty(tls, pCur, pRes)
+func (nativeBtreeStorageEngine) BtreeIsEmpty(ctx BtreeContext, pCur BtreeCursorHandle, pRes BtreeMemoryHandle) (r int32) {
+	return _nativeSqlite3BtreeIsEmpty(ctx.tls, pCur.ptr, pRes.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeLast(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32) {
-	return _nativeSqlite3BtreeLast(tls, pCur, pRes)
+func (nativeBtreeStorageEngine) BtreeLast(ctx BtreeContext, pCur BtreeCursorHandle, pRes BtreeMemoryHandle) (r int32) {
+	return _nativeSqlite3BtreeLast(ctx.tls, pCur.ptr, pRes.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeTableMoveto(tls *libc.TLS, pCur uintptr, intKey Ti64, biasRight int32, pRes uintptr) (r int32) {
-	return _nativeSqlite3BtreeTableMoveto(tls, pCur, intKey, biasRight, pRes)
+func (nativeBtreeStorageEngine) BtreeTableMoveto(ctx BtreeContext, pCur BtreeCursorHandle, intKey int64, biasRight int32, pRes BtreeMemoryHandle) (r int32) {
+	return _nativeSqlite3BtreeTableMoveto(ctx.tls, pCur.ptr, Ti64(intKey), biasRight, pRes.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeIndexMoveto(tls *libc.TLS, pCur uintptr, pIdxKey uintptr, pRes uintptr) (r int32) {
-	return _nativeSqlite3BtreeIndexMoveto(tls, pCur, pIdxKey, pRes)
+func (nativeBtreeStorageEngine) BtreeIndexMoveto(ctx BtreeContext, pCur BtreeCursorHandle, pIdxKey BtreeIndexKeyHandle, pRes BtreeMemoryHandle) (r int32) {
+	return _nativeSqlite3BtreeIndexMoveto(ctx.tls, pCur.ptr, pIdxKey.ptr, pRes.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeEof(tls *libc.TLS, pCur uintptr) (r int32) {
-	return _nativeSqlite3BtreeEof(tls, pCur)
+func (nativeBtreeStorageEngine) BtreeEof(ctx BtreeContext, pCur BtreeCursorHandle) (r int32) {
+	return _nativeSqlite3BtreeEof(ctx.tls, pCur.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeRowCountEst(tls *libc.TLS, pCur uintptr) (r Ti64) {
-	return _nativeSqlite3BtreeRowCountEst(tls, pCur)
+func (nativeBtreeStorageEngine) BtreeRowCountEst(ctx BtreeContext, pCur BtreeCursorHandle) (r int64) {
+	return int64(_nativeSqlite3BtreeRowCountEst(ctx.tls, pCur.ptr))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeNext(tls *libc.TLS, pCur uintptr, flags int32) (r int32) {
-	return _nativeSqlite3BtreeNext(tls, pCur, flags)
+func (nativeBtreeStorageEngine) BtreeNext(ctx BtreeContext, pCur BtreeCursorHandle, flags int32) (r int32) {
+	return _nativeSqlite3BtreeNext(ctx.tls, pCur.ptr, flags)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreePrevious(tls *libc.TLS, pCur uintptr, flags int32) (r int32) {
-	return _nativeSqlite3BtreePrevious(tls, pCur, flags)
+func (nativeBtreeStorageEngine) BtreePrevious(ctx BtreeContext, pCur BtreeCursorHandle, flags int32) (r int32) {
+	return _nativeSqlite3BtreePrevious(ctx.tls, pCur.ptr, flags)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeInsert(tls *libc.TLS, pCur uintptr, pX uintptr, flags int32, seekResult int32) (r int32) {
-	return _nativeSqlite3BtreeInsert(tls, pCur, pX, flags, seekResult)
+func (nativeBtreeStorageEngine) BtreeInsert(ctx BtreeContext, pCur BtreeCursorHandle, pX BtreePayloadHandle, flags int32, seekResult int32) (r int32) {
+	return _nativeSqlite3BtreeInsert(ctx.tls, pCur.ptr, pX.ptr, flags, seekResult)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeTransferRow(tls *libc.TLS, pDest uintptr, pSrc uintptr, iKey Ti64) (r int32) {
-	return _nativeSqlite3BtreeTransferRow(tls, pDest, pSrc, iKey)
+func (nativeBtreeStorageEngine) BtreeTransferRow(ctx BtreeContext, pDest BtreeCursorHandle, pSrc BtreeCursorHandle, iKey int64) (r int32) {
+	return _nativeSqlite3BtreeTransferRow(ctx.tls, pDest.ptr, pSrc.ptr, Ti64(iKey))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeDelete(tls *libc.TLS, pCur uintptr, flags Tu8) (r int32) {
-	return _nativeSqlite3BtreeDelete(tls, pCur, flags)
+func (nativeBtreeStorageEngine) BtreeDelete(ctx BtreeContext, pCur BtreeCursorHandle, flags uint8) (r int32) {
+	return _nativeSqlite3BtreeDelete(ctx.tls, pCur.ptr, Tu8(flags))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCreateTable(tls *libc.TLS, p uintptr, piTable uintptr, flags int32) (r int32) {
-	return _nativeSqlite3BtreeCreateTable(tls, p, piTable, flags)
+func (nativeBtreeStorageEngine) BtreeCreateTable(ctx BtreeContext, p BtreeHandle, piTable BtreeMemoryHandle, flags int32) (r int32) {
+	return _nativeSqlite3BtreeCreateTable(ctx.tls, p.ptr, piTable.ptr, flags)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeClearTable(tls *libc.TLS, p uintptr, iTable int32, pnChange uintptr) (r int32) {
-	return _nativeSqlite3BtreeClearTable(tls, p, iTable, pnChange)
+func (nativeBtreeStorageEngine) BtreeClearTable(ctx BtreeContext, p BtreeHandle, iTable int32, pnChange BtreeMemoryHandle) (r int32) {
+	return _nativeSqlite3BtreeClearTable(ctx.tls, p.ptr, iTable, pnChange.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeClearTableOfCursor(tls *libc.TLS, pCur uintptr) (r int32) {
-	return _nativeSqlite3BtreeClearTableOfCursor(tls, pCur)
+func (nativeBtreeStorageEngine) BtreeClearTableOfCursor(ctx BtreeContext, pCur BtreeCursorHandle) (r int32) {
+	return _nativeSqlite3BtreeClearTableOfCursor(ctx.tls, pCur.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeDropTable(tls *libc.TLS, p uintptr, iTable int32, piMoved uintptr) (r int32) {
-	return _nativeSqlite3BtreeDropTable(tls, p, iTable, piMoved)
+func (nativeBtreeStorageEngine) BtreeDropTable(ctx BtreeContext, p BtreeHandle, iTable int32, piMoved BtreeMemoryHandle) (r int32) {
+	return _nativeSqlite3BtreeDropTable(ctx.tls, p.ptr, iTable, piMoved.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeGetMeta(tls *libc.TLS, p uintptr, idx int32, pMeta uintptr) {
-	_nativeSqlite3BtreeGetMeta(tls, p, idx, pMeta)
+func (nativeBtreeStorageEngine) BtreeGetMeta(ctx BtreeContext, p BtreeHandle, idx int32, pMeta BtreeMemoryHandle) {
+	_nativeSqlite3BtreeGetMeta(ctx.tls, p.ptr, idx, pMeta.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeUpdateMeta(tls *libc.TLS, p uintptr, idx int32, iMeta Tu32) (r int32) {
-	return _nativeSqlite3BtreeUpdateMeta(tls, p, idx, iMeta)
+func (nativeBtreeStorageEngine) BtreeUpdateMeta(ctx BtreeContext, p BtreeHandle, idx int32, iMeta uint32) (r int32) {
+	return _nativeSqlite3BtreeUpdateMeta(ctx.tls, p.ptr, idx, Tu32(iMeta))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCount(tls *libc.TLS, db uintptr, pCur uintptr, pnEntry uintptr) (r int32) {
-	return _nativeSqlite3BtreeCount(tls, db, pCur, pnEntry)
+func (nativeBtreeStorageEngine) BtreeCount(ctx BtreeContext, db SQLiteHandle, pCur BtreeCursorHandle, pnEntry BtreeMemoryHandle) (r int32) {
+	return _nativeSqlite3BtreeCount(ctx.tls, db.ptr, pCur.ptr, pnEntry.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreePager(tls *libc.TLS, p uintptr) (r uintptr) {
-	return _nativeSqlite3BtreePager(tls, p)
+func (nativeBtreeStorageEngine) BtreePager(ctx BtreeContext, p BtreeHandle) (r BtreePagerHandle) {
+	return btreePagerHandle(ctx.tls, _nativeSqlite3BtreePager(ctx.tls, p.ptr))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeIntegrityCheck(tls *libc.TLS, db uintptr, p uintptr, aRoot uintptr, aCnt uintptr, nRoot int32, mxErr int32, pnErr uintptr, pzOut uintptr) (r int32) {
-	return _nativeSqlite3BtreeIntegrityCheck(tls, db, p, aRoot, aCnt, nRoot, mxErr, pnErr, pzOut)
+func (nativeBtreeStorageEngine) BtreeIntegrityCheck(ctx BtreeContext, db SQLiteHandle, p BtreeHandle, aRoot BtreeMemoryHandle, aCnt BtreeMemoryHandle, nRoot int32, mxErr int32, pnErr BtreeMemoryHandle, pzOut BtreeMemoryHandle) (r int32) {
+	return _nativeSqlite3BtreeIntegrityCheck(ctx.tls, db.ptr, p.ptr, aRoot.ptr, aCnt.ptr, nRoot, mxErr, pnErr.ptr, pzOut.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeGetFilename(tls *libc.TLS, p uintptr) (r uintptr) {
-	return _nativeSqlite3BtreeGetFilename(tls, p)
+func (nativeBtreeStorageEngine) BtreeGetFilename(ctx BtreeContext, p BtreeHandle) (r BtreeCStringHandle) {
+	return btreeCStringHandle(ctx.tls, _nativeSqlite3BtreeGetFilename(ctx.tls, p.ptr))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeGetJournalname(tls *libc.TLS, p uintptr) (r uintptr) {
-	return _nativeSqlite3BtreeGetJournalname(tls, p)
+func (nativeBtreeStorageEngine) BtreeGetJournalname(ctx BtreeContext, p BtreeHandle) (r BtreeCStringHandle) {
+	return btreeCStringHandle(ctx.tls, _nativeSqlite3BtreeGetJournalname(ctx.tls, p.ptr))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeTxnState(tls *libc.TLS, p uintptr) (r int32) {
-	return _nativeSqlite3BtreeTxnState(tls, p)
+func (nativeBtreeStorageEngine) BtreeTxnState(ctx BtreeContext, p BtreeHandle) (r int32) {
+	return _nativeSqlite3BtreeTxnState(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCheckpoint(tls *libc.TLS, p uintptr, eMode int32, pnLog uintptr, pnCkpt uintptr) (r int32) {
-	return _nativeSqlite3BtreeCheckpoint(tls, p, eMode, pnLog, pnCkpt)
+func (nativeBtreeStorageEngine) BtreeCheckpoint(ctx BtreeContext, p BtreeHandle, eMode int32, pnLog BtreeMemoryHandle, pnCkpt BtreeMemoryHandle) (r int32) {
+	return _nativeSqlite3BtreeCheckpoint(ctx.tls, p.ptr, eMode, pnLog.ptr, pnCkpt.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeIsInBackup(tls *libc.TLS, p uintptr) (r int32) {
-	return _nativeSqlite3BtreeIsInBackup(tls, p)
+func (nativeBtreeStorageEngine) BtreeIsInBackup(ctx BtreeContext, p BtreeHandle) (r int32) {
+	return _nativeSqlite3BtreeIsInBackup(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeSchema(tls *libc.TLS, p uintptr, nBytes int32, __ccgo_fp_xFree uintptr) (r uintptr) {
-	return _nativeSqlite3BtreeSchema(tls, p, nBytes, __ccgo_fp_xFree)
+func (nativeBtreeStorageEngine) BtreeSchema(ctx BtreeContext, p BtreeHandle, nBytes int32, __ccgo_fp_xFree BtreeFunctionHandle) (r BtreeSchemaHandle) {
+	return btreeSchemaHandle(ctx.tls, _nativeSqlite3BtreeSchema(ctx.tls, p.ptr, nBytes, __ccgo_fp_xFree.ptr))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeSchemaLocked(tls *libc.TLS, p uintptr) (r int32) {
-	return _nativeSqlite3BtreeSchemaLocked(tls, p)
+func (nativeBtreeStorageEngine) BtreeSchemaLocked(ctx BtreeContext, p BtreeHandle) (r int32) {
+	return _nativeSqlite3BtreeSchemaLocked(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeLockTable(tls *libc.TLS, p uintptr, iTab int32, isWriteLock Tu8) (r int32) {
-	return _nativeSqlite3BtreeLockTable(tls, p, iTab, isWriteLock)
+func (nativeBtreeStorageEngine) BtreeLockTable(ctx BtreeContext, p BtreeHandle, iTab int32, isWriteLock uint8) (r int32) {
+	return _nativeSqlite3BtreeLockTable(ctx.tls, p.ptr, iTab, Tu8(isWriteLock))
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreePutData(tls *libc.TLS, pCsr uintptr, offset Tu32, amt Tu32, z uintptr) (r int32) {
-	return _nativeSqlite3BtreePutData(tls, pCsr, offset, amt, z)
+func (nativeBtreeStorageEngine) BtreePutData(ctx BtreeContext, pCsr BtreeCursorHandle, offset uint32, amt uint32, z BtreeMemoryHandle) (r int32) {
+	return _nativeSqlite3BtreePutData(ctx.tls, pCsr.ptr, Tu32(offset), Tu32(amt), z.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeIncrblobCursor(tls *libc.TLS, pCur uintptr) {
-	_nativeSqlite3BtreeIncrblobCursor(tls, pCur)
+func (nativeBtreeStorageEngine) BtreeIncrblobCursor(ctx BtreeContext, pCur BtreeCursorHandle) {
+	_nativeSqlite3BtreeIncrblobCursor(ctx.tls, pCur.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeSetVersion(tls *libc.TLS, pBtree uintptr, iVersion int32) (r int32) {
-	return _nativeSqlite3BtreeSetVersion(tls, pBtree, iVersion)
+func (nativeBtreeStorageEngine) BtreeSetVersion(ctx BtreeContext, pBtree BtreeHandle, iVersion int32) (r int32) {
+	return _nativeSqlite3BtreeSetVersion(ctx.tls, pBtree.ptr, iVersion)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCursorHasHint(tls *libc.TLS, pCsr uintptr, mask uint32) (r int32) {
-	return _nativeSqlite3BtreeCursorHasHint(tls, pCsr, mask)
+func (nativeBtreeStorageEngine) BtreeCursorHasHint(ctx BtreeContext, pCsr BtreeCursorHandle, mask uint32) (r int32) {
+	return _nativeSqlite3BtreeCursorHasHint(ctx.tls, pCsr.ptr, mask)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeIsReadonly(tls *libc.TLS, p uintptr) (r int32) {
-	return _nativeSqlite3BtreeIsReadonly(tls, p)
+func (nativeBtreeStorageEngine) BtreeIsReadonly(ctx BtreeContext, p BtreeHandle) (r int32) {
+	return _nativeSqlite3BtreeIsReadonly(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeClearCache(tls *libc.TLS, p uintptr) {
-	_nativeSqlite3BtreeClearCache(tls, p)
+func (nativeBtreeStorageEngine) BtreeClearCache(ctx BtreeContext, p BtreeHandle) {
+	_nativeSqlite3BtreeClearCache(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeSharable(tls *libc.TLS, p uintptr) (r int32) {
-	return _nativeSqlite3BtreeSharable(tls, p)
+func (nativeBtreeStorageEngine) BtreeSharable(ctx BtreeContext, p BtreeHandle) (r int32) {
+	return _nativeSqlite3BtreeSharable(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeConnectionCount(tls *libc.TLS, p uintptr) (r int32) {
-	return _nativeSqlite3BtreeConnectionCount(tls, p)
+func (nativeBtreeStorageEngine) BtreeConnectionCount(ctx BtreeContext, p BtreeHandle) (r int32) {
+	return _nativeSqlite3BtreeConnectionCount(ctx.tls, p.ptr)
 }
 
-func (nativeBtreeStorageEngine) _sqlite3BtreeCopyFile(tls *libc.TLS, pTo uintptr, pFrom uintptr) (r int32) {
-	return _nativeSqlite3BtreeCopyFile(tls, pTo, pFrom)
+func (nativeBtreeStorageEngine) BtreeCopyFile(ctx BtreeContext, pTo BtreeHandle, pFrom BtreeHandle) (r int32) {
+	return _nativeSqlite3BtreeCopyFile(ctx.tls, pTo.ptr, pFrom.ptr)
 }
