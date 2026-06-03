@@ -412,6 +412,146 @@ func TestMinweightStorageEngineVacuumTransfersRows(t *testing.T) {
 	}
 }
 
+func TestMinweightStorageEngineBtreePragmaState(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if got := minweightQueryInt(t, db, "PRAGMA page_size"); got != 4096 {
+		t.Fatalf("default page_size = %d, want 4096", got)
+	}
+	execMinweightSQL(t, db, "PRAGMA page_size = 8192")
+	if got := minweightQueryInt(t, db, "PRAGMA page_size"); got != 8192 {
+		t.Fatalf("page_size = %d, want 8192", got)
+	}
+
+	if got := minweightQueryInt(t, db, "PRAGMA secure_delete"); got != 0 {
+		t.Fatalf("default secure_delete = %d, want 0", got)
+	}
+	if got := minweightQueryInt(t, db, "PRAGMA secure_delete = FAST"); got != 2 {
+		t.Fatalf("secure_delete FAST = %d, want 2", got)
+	}
+	if got := minweightQueryInt(t, db, "PRAGMA secure_delete = ON"); got != 1 {
+		t.Fatalf("secure_delete ON = %d, want 1", got)
+	}
+	if got := minweightQueryInt(t, db, "PRAGMA secure_delete = OFF"); got != 0 {
+		t.Fatalf("secure_delete OFF = %d, want 0", got)
+	}
+
+	if got := minweightQueryInt(t, db, "PRAGMA max_page_count"); got != 4294967294 {
+		t.Fatalf("default max_page_count = %d, want 4294967294", got)
+	}
+	if got := minweightQueryInt(t, db, "PRAGMA max_page_count = 12345"); got != 12345 {
+		t.Fatalf("max_page_count set result = %d, want 12345", got)
+	}
+	if got := minweightQueryInt(t, db, "PRAGMA max_page_count"); got != 12345 {
+		t.Fatalf("max_page_count = %d, want 12345", got)
+	}
+
+	if got := minweightQueryInt(t, db, "PRAGMA auto_vacuum"); got != 0 {
+		t.Fatalf("default auto_vacuum = %d, want 0", got)
+	}
+	execMinweightSQL(t, db, "PRAGMA auto_vacuum = INCREMENTAL")
+	if got := minweightQueryInt(t, db, "PRAGMA auto_vacuum"); got != 2 {
+		t.Fatalf("auto_vacuum incremental = %d, want 2", got)
+	}
+	execMinweightSQL(t, db, "PRAGMA auto_vacuum = FULL")
+	if got := minweightQueryInt(t, db, "PRAGMA auto_vacuum"); got != 1 {
+		t.Fatalf("auto_vacuum full = %d, want 1", got)
+	}
+
+	execMinweightSQL(t, db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, db, "INSERT INTO t(v) VALUES ('a'), ('b')")
+	execMinweightSQL(t, db, "VACUUM")
+	if got := minweightQueryInt(t, db, "PRAGMA page_size"); got != 8192 {
+		t.Fatalf("page_size after VACUUM = %d, want 8192", got)
+	}
+	if got := minweightQueryInt(t, db, "PRAGMA auto_vacuum"); got != 1 {
+		t.Fatalf("auto_vacuum after VACUUM = %d, want 1", got)
+	}
+}
+
+func TestMinweightStorageEngineLogicalSerializePreservesBtreePragmaState(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	type serializer interface {
+		Serialize() ([]byte, error)
+		Deserialize([]byte) error
+	}
+
+	src, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+
+	execMinweightSQL(t, src, "PRAGMA page_size = 8192")
+	if got := minweightQueryInt(t, src, "PRAGMA secure_delete = FAST"); got != 2 {
+		t.Fatalf("secure_delete FAST = %d, want 2", got)
+	}
+	if got := minweightQueryInt(t, src, "PRAGMA max_page_count = 12345"); got != 12345 {
+		t.Fatalf("max_page_count set result = %d, want 12345", got)
+	}
+	execMinweightSQL(t, src, "PRAGMA auto_vacuum = INCREMENTAL")
+	execMinweightSQL(t, src, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, src, "INSERT INTO t(v) VALUES ('a')")
+
+	var snapshot []byte
+	srcConn, err := src.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srcConn.Raw(func(dc any) error {
+		var err error
+		snapshot, err = dc.(serializer).Serialize()
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srcConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dst, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dst.Close()
+
+	dstConn, err := dst.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dstConn.Raw(func(dc any) error {
+		return dc.(serializer).Deserialize(snapshot)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dstConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := minweightQueryInt(t, dst, "PRAGMA page_size"); got != 8192 {
+		t.Fatalf("deserialized page_size = %d, want 8192", got)
+	}
+	if got := minweightQueryInt(t, dst, "PRAGMA secure_delete"); got != 2 {
+		t.Fatalf("deserialized secure_delete = %d, want 2", got)
+	}
+	if got := minweightQueryInt(t, dst, "PRAGMA max_page_count"); got != 12345 {
+		t.Fatalf("deserialized max_page_count = %d, want 12345", got)
+	}
+	if got := minweightQueryInt(t, dst, "PRAGMA auto_vacuum"); got != 2 {
+		t.Fatalf("deserialized auto_vacuum = %d, want 2", got)
+	}
+	if got := minweightQueryInt(t, dst, "SELECT count(*) FROM t"); got != 1 {
+		t.Fatalf("deserialized row count = %d, want 1", got)
+	}
+}
+
 func TestMinweightStorageEngineTransactionRollbackRestoresRows(t *testing.T) {
 	installMinweightStorageEngineForTest(t)
 
@@ -545,6 +685,15 @@ func execMinweightSQL(t *testing.T, db *sql.DB, query string) {
 	if _, err := db.Exec(query); err != nil {
 		t.Fatalf("%s: %v", query, err)
 	}
+}
+
+func minweightQueryInt(t *testing.T, db *sql.DB, query string) int64 {
+	t.Helper()
+	var got int64
+	if err := db.QueryRow(query).Scan(&got); err != nil {
+		t.Fatalf("%s: %v", query, err)
+	}
+	return got
 }
 
 func minweightRowStrings(t *testing.T, db *sql.DB) []string {

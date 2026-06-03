@@ -45,14 +45,21 @@ type minweightStorageEngine struct {
 }
 
 type minweightDatabase struct {
-	mu      sync.Mutex
-	store   *minweight.Store
-	meta    [SQLITE_N_BTREE_META]uint32
-	tables  map[uint32]minweightTable
-	next    uint32
-	dataVer uint32
-	readers map[*minweightBtree]bool
-	writer  *minweightBtree
+	mu            sync.Mutex
+	store         *minweight.Store
+	meta          [SQLITE_N_BTREE_META]uint32
+	tables        map[uint32]minweightTable
+	next          uint32
+	dataVer       uint32
+	pageSize      int32
+	reserve       int32
+	reserveWanted int32
+	pageSizeFixed bool
+	maxPageCount  uint32
+	secureDelete  int32
+	autoVacuum    int32
+	readers       map[*minweightBtree]bool
+	writer        *minweightBtree
 }
 
 type minweightBtree struct {
@@ -101,11 +108,18 @@ type minweightRow struct {
 }
 
 type minweightSnapshot struct {
-	items   []minweightSnapshotItem
-	meta    [SQLITE_N_BTREE_META]uint32
-	tables  map[uint32]minweightTable
-	next    uint32
-	dataVer uint32
+	items         []minweightSnapshotItem
+	meta          [SQLITE_N_BTREE_META]uint32
+	tables        map[uint32]minweightTable
+	next          uint32
+	dataVer       uint32
+	pageSize      int32
+	reserve       int32
+	reserveWanted int32
+	pageSizeFixed bool
+	maxPageCount  uint32
+	secureDelete  int32
+	autoVacuum    int32
 }
 
 type minweightSnapshotItem struct {
@@ -155,12 +169,18 @@ func minweightSQLiteError(err error) int32 {
 	return SQLITE_ERROR
 }
 
+func minweightValidPageSize(pageSize int32) bool {
+	return pageSize >= 512 && pageSize <= SQLITE_MAX_PAGE_SIZE && pageSize&(pageSize-1) == 0
+}
+
 func minweightNewDatabase() *minweightDatabase {
 	return &minweightDatabase{
-		store:   minweight.New(),
-		tables:  map[uint32]minweightTable{1: {intKey: true}},
-		next:    1,
-		readers: map[*minweightBtree]bool{},
+		store:        minweight.New(),
+		tables:       map[uint32]minweightTable{1: {intKey: true}},
+		next:         1,
+		pageSize:     SQLITE_DEFAULT_PAGE_SIZE,
+		maxPageCount: SQLITE_MAX_PAGE_COUNT,
+		readers:      map[*minweightBtree]bool{},
 	}
 }
 
@@ -275,6 +295,13 @@ func (bt *minweightBtree) snapshot() (*minweightSnapshot, error) {
 	s.tables = minweightCloneTables(bt.tables)
 	s.next = bt.next
 	s.dataVer = bt.dataVer
+	s.pageSize = bt.pageSize
+	s.reserve = bt.reserve
+	s.reserveWanted = bt.reserveWanted
+	s.pageSizeFixed = bt.pageSizeFixed
+	s.maxPageCount = bt.maxPageCount
+	s.secureDelete = bt.secureDelete
+	s.autoVacuum = bt.autoVacuum
 	bt.mu.Unlock()
 	return s, nil
 }
@@ -292,6 +319,13 @@ func (bt *minweightBtree) restoreSnapshot(s minweightSnapshot) error {
 	bt.meta = s.meta
 	bt.tables = minweightCloneTables(s.tables)
 	bt.next = s.next
+	bt.pageSize = s.pageSize
+	bt.reserve = s.reserve
+	bt.reserveWanted = s.reserveWanted
+	bt.pageSizeFixed = s.pageSizeFixed
+	bt.maxPageCount = s.maxPageCount
+	bt.secureDelete = s.secureDelete
+	bt.autoVacuum = s.autoVacuum
 	bt.dataVer = dataVer
 	bt.mu.Unlock()
 	return nil
@@ -888,28 +922,110 @@ func (e *minweightStorageEngine) BtreeSetPagerFlags(ctx BtreeContext, p BtreeHan
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeSetPageSize(ctx BtreeContext, p BtreeHandle, pageSize int32, nReserve int32, iFix int32) (r int32) {
+	bt := e.btree(p)
+	if rc := bt.ensureWritable(); rc != SQLITE_OK {
+		return rc
+	}
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	if nReserve < 0 {
+		nReserve = bt.reserve
+	} else {
+		bt.reserveWanted = nReserve
+	}
+	if bt.reserve == nReserve && (pageSize == 0 || pageSize == bt.pageSize) {
+		return SQLITE_OK
+	}
+	if nReserve < bt.reserve {
+		nReserve = bt.reserve
+	}
+	if bt.pageSizeFixed {
+		return SQLITE_READONLY
+	}
+	if minweightValidPageSize(pageSize) {
+		if nReserve > 32 && pageSize == 512 {
+			pageSize = 1024
+		}
+		bt.pageSize = pageSize
+	}
+	bt.reserve = nReserve
+	if iFix != 0 {
+		bt.pageSizeFixed = true
+	}
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeGetPageSize(ctx BtreeContext, p BtreeHandle) (r int32) {
-	return 4096
+	bt := e.btree(p)
+	bt.mu.Lock()
+	pageSize := bt.pageSize
+	bt.mu.Unlock()
+	return pageSize
 }
 func (e *minweightStorageEngine) BtreeGetReserveNoMutex(ctx BtreeContext, p BtreeHandle) (r int32) {
-	return 0
+	bt := e.btree(p)
+	bt.mu.Lock()
+	reserve := bt.reserve
+	bt.mu.Unlock()
+	return reserve
 }
 func (e *minweightStorageEngine) BtreeGetRequestedReserve(ctx BtreeContext, p BtreeHandle) (r int32) {
-	return 0
+	bt := e.btree(p)
+	bt.mu.Lock()
+	reserve := bt.reserve
+	if bt.reserveWanted > reserve {
+		reserve = bt.reserveWanted
+	}
+	bt.mu.Unlock()
+	return reserve
 }
 func (e *minweightStorageEngine) BtreeMaxPageCount(ctx BtreeContext, p BtreeHandle, mxPage uint32) (r uint32) {
-	return mxPage
+	bt := e.btree(p)
+	bt.mu.Lock()
+	if mxPage > 0 {
+		bt.maxPageCount = mxPage
+	}
+	maxPageCount := bt.maxPageCount
+	bt.mu.Unlock()
+	return maxPageCount
 }
 func (e *minweightStorageEngine) BtreeSecureDelete(ctx BtreeContext, p BtreeHandle, newFlag int32) (r int32) {
-	return 0
+	if p.IsNil() {
+		return 0
+	}
+	bt := e.btree(p)
+	bt.mu.Lock()
+	if newFlag >= 0 {
+		bt.secureDelete = newFlag
+	}
+	secureDelete := bt.secureDelete
+	bt.mu.Unlock()
+	return secureDelete
 }
 func (e *minweightStorageEngine) BtreeSetAutoVacuum(ctx BtreeContext, p BtreeHandle, autoVacuum int32) (r int32) {
+	bt := e.btree(p)
+	if rc := bt.ensureWritable(); rc != SQLITE_OK {
+		return rc
+	}
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	if bt.pageSizeFixed && (autoVacuum != 0) != (bt.autoVacuum != BTREE_AUTOVACUUM_NONE) {
+		return SQLITE_READONLY
+	}
+	if autoVacuum == BTREE_AUTOVACUUM_INCR {
+		bt.autoVacuum = BTREE_AUTOVACUUM_INCR
+	} else if autoVacuum != 0 {
+		bt.autoVacuum = BTREE_AUTOVACUUM_FULL
+	} else {
+		bt.autoVacuum = BTREE_AUTOVACUUM_NONE
+	}
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeGetAutoVacuum(ctx BtreeContext, p BtreeHandle) (r int32) {
-	return BTREE_AUTOVACUUM_NONE
+	bt := e.btree(p)
+	bt.mu.Lock()
+	autoVacuum := bt.autoVacuum
+	bt.mu.Unlock()
+	return autoVacuum
 }
 
 func (e *minweightStorageEngine) BtreeNewDb(ctx BtreeContext, p BtreeHandle) (r int32) {
@@ -1639,6 +1755,13 @@ func (e *minweightStorageEngine) BtreeUpdateMeta(ctx BtreeContext, p BtreeHandle
 	}
 	if idx >= 0 && idx < int32(len(bt.meta)) {
 		bt.meta[idx] = iMeta
+	}
+	if idx == int32(BTREE_INCR_VACUUM) && bt.autoVacuum != BTREE_AUTOVACUUM_NONE {
+		if iMeta != 0 {
+			bt.autoVacuum = BTREE_AUTOVACUUM_INCR
+		} else {
+			bt.autoVacuum = BTREE_AUTOVACUUM_FULL
+		}
 	}
 	bt.dataVer++
 	return SQLITE_OK

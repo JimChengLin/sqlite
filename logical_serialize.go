@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,8 +19,16 @@ import (
 const logicalSerializeMagic = "modernc.org/sqlite logical serialize v1\n"
 
 type logicalSerializedDatabase struct {
-	Schema []logicalSerializedSchema `json:"schema"`
-	Tables []logicalSerializedTable  `json:"tables"`
+	Settings *logicalSerializedSettings `json:"settings,omitempty"`
+	Schema   []logicalSerializedSchema  `json:"schema"`
+	Tables   []logicalSerializedTable   `json:"tables"`
+}
+
+type logicalSerializedSettings struct {
+	PageSize     int64 `json:"pageSize"`
+	AutoVacuum   int64 `json:"autoVacuum"`
+	SecureDelete int64 `json:"secureDelete"`
+	MaxPageCount int64 `json:"maxPageCount"`
 }
 
 type logicalSerializedSchema struct {
@@ -46,6 +55,11 @@ type logicalSerializedValue struct {
 
 func logicalSerialize(c *conn) ([]byte, error) {
 	db := logicalSerializedDatabase{}
+	settings, err := logicalSerializeSettings(c)
+	if err != nil {
+		return nil, err
+	}
+	db.Settings = settings
 	schema, err := logicalSerializeSchema(c)
 	if err != nil {
 		return nil, err
@@ -85,6 +99,11 @@ func logicalDeserialize(c *conn, buf []byte) error {
 	if err := logicalBackupExec(c, "PRAGMA foreign_keys=OFF"); err != nil {
 		return err
 	}
+	if db.Settings != nil {
+		if err := logicalDeserializeSettings(c, *db.Settings); err != nil {
+			return err
+		}
+	}
 	if err := logicalBackupClearDestination(c); err != nil {
 		return err
 	}
@@ -108,6 +127,76 @@ func logicalDeserialize(c *conn, buf []byte) error {
 		}
 	}
 	return nil
+}
+
+func logicalSerializeSettings(c *conn) (*logicalSerializedSettings, error) {
+	pageSize, err := logicalSerializePragmaInt(c, "PRAGMA page_size")
+	if err != nil {
+		return nil, err
+	}
+	autoVacuum, err := logicalSerializePragmaInt(c, "PRAGMA auto_vacuum")
+	if err != nil {
+		return nil, err
+	}
+	secureDelete, err := logicalSerializePragmaInt(c, "PRAGMA secure_delete")
+	if err != nil {
+		return nil, err
+	}
+	maxPageCount, err := logicalSerializePragmaInt(c, "PRAGMA max_page_count")
+	if err != nil {
+		return nil, err
+	}
+	return &logicalSerializedSettings{
+		PageSize:     pageSize,
+		AutoVacuum:   autoVacuum,
+		SecureDelete: secureDelete,
+		MaxPageCount: maxPageCount,
+	}, nil
+}
+
+func logicalSerializePragmaInt(c *conn, query string) (int64, error) {
+	rows, err := logicalBackupQuery(c, query)
+	if err != nil {
+		return 0, err
+	}
+	if len(rows) != 1 || len(rows[0]) != 1 {
+		return 0, fmt.Errorf("sqlite: serialize %s returned %d rows", query, len(rows))
+	}
+	v, ok := rows[0][0].(int64)
+	if !ok {
+		return 0, fmt.Errorf("sqlite: serialize %s returned %T", query, rows[0][0])
+	}
+	return v, nil
+}
+
+func logicalDeserializeSettings(c *conn, settings logicalSerializedSettings) error {
+	if settings.PageSize != 0 {
+		if err := logicalBackupExec(c, "PRAGMA page_size="+strconv.FormatInt(settings.PageSize, 10)); err != nil {
+			return err
+		}
+	}
+	if err := logicalBackupExec(c, "PRAGMA auto_vacuum="+strconv.FormatInt(settings.AutoVacuum, 10)); err != nil {
+		return err
+	}
+	if err := logicalBackupExec(c, "PRAGMA secure_delete="+logicalSecureDeletePragmaValue(settings.SecureDelete)); err != nil {
+		return err
+	}
+	if settings.MaxPageCount != 0 {
+		if err := logicalBackupExec(c, "PRAGMA max_page_count="+strconv.FormatInt(settings.MaxPageCount, 10)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func logicalSecureDeletePragmaValue(v int64) string {
+	if v == 2 {
+		return "FAST"
+	}
+	if v != 0 {
+		return "ON"
+	}
+	return "OFF"
 }
 
 func logicalSerializeSchema(c *conn) ([]logicalSerializedSchema, error) {

@@ -10,6 +10,7 @@ Last updated: 2026-06-04.
 - Index entries are stored as `i || root:u32be || sqliteIndexRecordBytes -> sqliteIndexRecordBytes`.
 - Non-integer btrees are ordered with SQLite's own record comparator through `KeyInfo`; byte order alone is not treated as SQLite sort order.
 - `Serialize` and `Deserialize` use SQLite page images for the native engine and a minweight logical snapshot for non-native engines.
+- Minweight models user-visible BTree settings for `PRAGMA page_size`, `PRAGMA auto_vacuum`, `PRAGMA secure_delete`, and `PRAGMA max_page_count`; these are logical settings, not real page-file contents.
 
 ## Fixed In This Round
 
@@ -29,6 +30,8 @@ Last updated: 2026-06-04.
 - Matched write transaction rollback, explicit savepoint rollback/release, and statement-level rollback for minweight logical state.
 - Added minweight `BtreeTransferRow`/`BTREE_PREFORMAT` row transfer support for SQLite's VACUUM row-copy path.
 - Added logical `BtreeCopyFile` snapshot restore and `BtreeSetVersion` file-format cookie updates so VACUUM can replace the target btree without physical SQLite page images.
+- Modeled minweight BTree PRAGMA state for page size, reserve bytes, max page count, secure delete, and auto-vacuum flags.
+- Extended minweight logical `Serialize`/`Deserialize` payloads with those BTree settings while keeping older logical payloads readable.
 
 ## Focused Test Policy
 
