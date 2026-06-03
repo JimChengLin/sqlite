@@ -1099,10 +1099,6 @@ func TestRegisteredFunctions(t *testing.T) {
 	})
 
 	t.Run("QueryContext with context expiring", func(tt *testing.T) {
-		if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
-			tt.Skip("minweight storage engine does not yet support running-query interrupt stress semantics")
-		}
-
 		withDB(func(db *sql.DB) {
 			if _, err := db.Exec("create table t(b text); insert into t values (?), (?)", "text1", "text2"); err != nil {
 				tt.Fatal(err)
@@ -1204,10 +1200,6 @@ func TestRegisteredFunctions(t *testing.T) {
 	})
 
 	t.Run("ExecContext with context expiring", func(tt *testing.T) {
-		if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
-			tt.Skip("minweight storage engine does not yet support running-exec interrupt stress semantics")
-		}
-
 		withDB(func(db *sql.DB) {
 			if _, err := db.Exec("create table t(b text); insert into t values (?), (?)", "text1", "text2"); err != nil {
 				tt.Fatal(err)

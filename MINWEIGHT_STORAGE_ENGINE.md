@@ -49,10 +49,10 @@ Do not run the full `TestRegisteredFunctions` with a 180s timeout as a routine n
 
 ## Slow Or Reduced-Frequency Tests
 
-- `TestRegisteredFunctions/QueryContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Skipped under minweight until running-query interrupt semantics are implemented.
-- `TestRegisteredFunctions/ExecContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Skipped under minweight until running-exec interrupt semantics are implemented.
+- `TestRegisteredFunctions/QueryContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Verified under minweight on 2026-06-03; keep it out of the focused script and run it only when specifically checking interrupt behavior.
+- `TestRegisteredFunctions/ExecContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Verified under minweight on 2026-06-03; keep it out of the focused script and run it only when specifically checking interrupt behavior.
 - `TestIssue53`: passes under minweight but takes about 13s on darwin/arm64. Keep it out of the focused script; run it in full minweight checks or when index seek/order code changes.
-- Full `env SQLITE_TEST_STORAGE_ENGINE=minweight go test ./`: currently about 88s on darwin/arm64. Run before commit and after broad engine changes, not after every local edit.
+- Full `env SQLITE_TEST_STORAGE_ENGINE=minweight go test ./`: currently about 8m20s on darwin/arm64 because it includes the two expiring-context stress tests. Run before commit and after broad engine changes, not after every local edit.
 - `./test-storage-engine.sh`: includes cross-target lib compilation matrix. Run before commit, not after each narrow code edit.
 
 ## Minweight-Specific Skips
@@ -68,10 +68,7 @@ These tests are intentionally skipped only when `SQLITE_TEST_STORAGE_ENGINE=minw
 - `TestFcntlPersistWAL`: WAL files and `PERSIST_WAL` file-control.
 - `TestRegisteredFunctions/serialize_and_deserialize`: SQLite page image API.
 - `TestRegisteredFunctions/serialize_and_deserialize_allocator`: SQLite page image API.
-- `TestRegisteredFunctions/QueryContext_with_context_expiring`: running-query interrupt stress semantics.
-- `TestRegisteredFunctions/ExecContext_with_context_expiring`: running-exec interrupt stress semantics.
 
 ## TODO
 
 - Decide whether physical page features remain explicitly unsupported or get a page-file compatibility layer: `sqlite_dbpage`, VFS-backed DB files, `Serialize`, `Deserialize`, WAL persistence, read-only chmod state, and invalid path open behavior are in this bucket.
-- Implement minweight-compatible running statement interruption for expiring context stress tests.
