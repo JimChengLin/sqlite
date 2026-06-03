@@ -141,6 +141,13 @@ type StorageEngineFileControlPersistWAL interface {
 	FileControlPersistWAL(ctx BtreeContext, db SQLiteHandle, dbName string, mode int32) (int32, int32)
 }
 
+// StorageEngineLogicalBackup is implemented by engines that need to model
+// sqlite3_backup source state outside SQLite's native TBtree.FnBackup field.
+type StorageEngineLogicalBackup interface {
+	BeginLogicalBackup(ctx BtreeContext, db SQLiteHandle) int32
+	FinishLogicalBackup(ctx BtreeContext, db SQLiteHandle) int32
+}
+
 type nativeBtreeStorageEngine struct{}
 
 type storageEngineHolder struct {
@@ -178,6 +185,22 @@ func StorageEngineFileControlPersistWALMode(tls *libc.TLS, db uintptr, dbName st
 		return mode, SQLITE_ERROR
 	}
 	return engine.FileControlPersistWAL(btreeContext(tls), sqliteHandle(tls, db), dbName, mode)
+}
+
+func StorageEngineBeginLogicalBackup(tls *libc.TLS, db uintptr) int32 {
+	engine, ok := storageEngine().(StorageEngineLogicalBackup)
+	if !ok {
+		return SQLITE_ERROR
+	}
+	return engine.BeginLogicalBackup(btreeContext(tls), sqliteHandle(tls, db))
+}
+
+func StorageEngineFinishLogicalBackup(tls *libc.TLS, db uintptr) int32 {
+	engine, ok := storageEngine().(StorageEngineLogicalBackup)
+	if !ok {
+		return SQLITE_ERROR
+	}
+	return engine.FinishLogicalBackup(btreeContext(tls), sqliteHandle(tls, db))
 }
 
 // BtreeContext is the per-call SQLite runtime context seen by storage engines.

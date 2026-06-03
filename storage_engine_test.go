@@ -94,6 +94,7 @@ func TestStorageEngineAPIDoesNotExposeRawABIInputs(t *testing.T) {
 	assertInterfaceDoesNotExposeRawABIInputs(t, reflect.TypeOf((*sqlite.StorageEngineBtreeIntegrityCheck)(nil)).Elem())
 	assertInterfaceDoesNotExposeRawABIInputs(t, reflect.TypeOf((*sqlite.StorageEngineBtreeIntegrityCheckFreebsd386)(nil)).Elem())
 	assertInterfaceDoesNotExposeRawABIInputs(t, reflect.TypeOf((*sqlite.StorageEngineBtreeIntegrityCheckNetbsdAmd64)(nil)).Elem())
+	assertInterfaceDoesNotExposeRawABIInputs(t, reflect.TypeOf((*sqlite.StorageEngineLogicalBackup)(nil)).Elem())
 }
 
 func assertInterfaceDoesNotExposeRawABIInputs(t *testing.T, typ reflect.Type) {

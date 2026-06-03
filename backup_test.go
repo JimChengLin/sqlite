@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // TestBackupCommitClosesConnOnError verifies that Commit() closes the
@@ -181,6 +183,53 @@ func TestBackupProgress(t *testing.T) {
 	if got := bck.PageCount(); got != pages {
 		t.Errorf("PageCount after DONE: got %d, want %d (unchanged from mid-backup)", got, pages)
 	}
+}
+
+func TestMinweightLogicalBackupKeepsSourceConnBusy(t *testing.T) {
+	engine, ok := testMinweightStorageEngine()
+	if !ok {
+		t.Skip("minweight storage engine is not available on this platform")
+	}
+	SetStorageEngine(engine)
+	t.Cleanup(func() {
+		SetStorageEngine(nil)
+	})
+
+	srcConn, err := newConn(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srcClosed := false
+	defer func() {
+		if !srcClosed {
+			_ = srcConn.Close()
+		}
+	}()
+
+	if err := execConn(srcConn, "CREATE TABLE t(x)"); err != nil {
+		t.Fatal(err)
+	}
+
+	dstPath := filepath.Join(t.TempDir(), "dst.db")
+	bck, err := srcConn.NewBackup(dstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rc := sqlite3.Xsqlite3_close(srcConn.tls, srcConn.db); rc != sqlite3.SQLITE_BUSY {
+		if rc == sqlite3.SQLITE_OK {
+			srcConn.db = 0
+			srcClosed = true
+		}
+		t.Fatalf("sqlite3_close with unfinished backup returned %d, want SQLITE_BUSY", rc)
+	}
+	if err := bck.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	if err := srcConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	srcClosed = true
 }
 
 // execConn is a test helper that executes a SQL statement on a raw conn.

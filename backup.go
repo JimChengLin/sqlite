@@ -32,6 +32,7 @@ type logicalBackup struct {
 	remaining int
 	started   bool
 	done      bool
+	released  bool
 	err       error
 }
 
@@ -62,7 +63,7 @@ func (b *Backup) Step(n int32) (bool, error) {
 func (b *Backup) Finish() error {
 	if b.logical != nil {
 		b.dstConn.Close()
-		return b.logical.err
+		return b.logical.release()
 	}
 	rc := sqlite3.Xsqlite3_backup_finish(b.srcConn.tls, b.pBackup)
 	b.dstConn.Close()
@@ -111,6 +112,10 @@ func (b *Backup) Commit() (driver.Conn, error) {
 		if !b.logical.done && b.logical.err == nil {
 			_, _ = b.logical.step(-1)
 		}
+		if err := b.logical.release(); err != nil {
+			b.dstConn.Close()
+			return nil, err
+		}
 		if b.logical.err == nil {
 			return b.dstConn, nil
 		}
@@ -134,6 +139,9 @@ func newLogicalBackup(src *conn, dst *conn) (*logicalBackup, error) {
 	pageCount, err := logicalBackupPageCount(src)
 	if err != nil {
 		return nil, err
+	}
+	if rc := sqlite3.StorageEngineBeginLogicalBackup(src.tls, src.db); rc != sqlite3.SQLITE_OK {
+		return nil, errstrForDB(src.tls, rc, src.db)
 	}
 	return &logicalBackup{src: src, dst: dst, pageCount: pageCount, remaining: pageCount}, nil
 }
@@ -171,6 +179,21 @@ func (b *logicalBackup) step(n int32) (bool, error) {
 	b.remaining = 0
 	b.done = true
 	return false, nil
+}
+
+func (b *logicalBackup) release() error {
+	if b.released {
+		return b.err
+	}
+	b.released = true
+	if rc := sqlite3.StorageEngineFinishLogicalBackup(b.src.tls, b.src.db); rc != sqlite3.SQLITE_OK {
+		err := errstrForDB(b.src.tls, rc, b.src.db)
+		if b.err == nil {
+			b.err = err
+		}
+		return err
+	}
+	return b.err
 }
 
 func (b *logicalBackup) Remaining() int {

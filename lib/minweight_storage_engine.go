@@ -80,6 +80,7 @@ type minweightBtree struct {
 	readOnly    bool
 	sharable    bool
 	persistWAL  bool
+	backupCount int32
 	walActive   bool
 	txSnapshot  *minweightSnapshot
 	savepoints  []minweightSnapshot
@@ -166,6 +167,12 @@ func (e *minweightStorageEngine) btree(p BtreeHandle) *minweightBtree {
 		panic(fmt.Sprintf("sqlite minweight storage engine: unknown btree handle %#x", p.ptr))
 	}
 	return bt
+}
+
+func (e *minweightStorageEngine) btreeForDB(db SQLiteHandle) *minweightBtree {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.btrees[e.aliases[db.ptr]]
 }
 
 func (e *minweightStorageEngine) cursor(pCur BtreeCursorHandle) *minweightCursor {
@@ -1194,10 +1201,7 @@ func (e *minweightStorageEngine) FileControlPersistWAL(ctx BtreeContext, db SQLi
 	if dbName != "" && dbName != "main" {
 		return mode, SQLITE_ERROR
 	}
-	e.mu.Lock()
-	token := e.aliases[db.ptr]
-	bt := e.btrees[token]
-	e.mu.Unlock()
+	bt := e.btreeForDB(db)
 	if bt == nil {
 		return mode, SQLITE_ERROR
 	}
@@ -1212,6 +1216,31 @@ func (e *minweightStorageEngine) FileControlPersistWAL(ctx BtreeContext, db SQLi
 	}
 	bt.mu.Unlock()
 	return mode, SQLITE_OK
+}
+
+func (e *minweightStorageEngine) BeginLogicalBackup(ctx BtreeContext, db SQLiteHandle) int32 {
+	bt := e.btreeForDB(db)
+	if bt == nil {
+		return SQLITE_ERROR
+	}
+	bt.mu.Lock()
+	bt.backupCount++
+	bt.mu.Unlock()
+	return SQLITE_OK
+}
+
+func (e *minweightStorageEngine) FinishLogicalBackup(ctx BtreeContext, db SQLiteHandle) int32 {
+	bt := e.btreeForDB(db)
+	if bt == nil {
+		return SQLITE_ERROR
+	}
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	if bt.backupCount == 0 {
+		return SQLITE_ERROR
+	}
+	bt.backupCount--
+	return SQLITE_OK
 }
 
 func (e *minweightStorageEngine) BtreeSetCacheSize(ctx BtreeContext, p BtreeHandle, mxPage int32) (r int32) {
@@ -2207,7 +2236,14 @@ func (e *minweightStorageEngine) BtreeCheckpoint(ctx BtreeContext, p BtreeHandle
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeIsInBackup(ctx BtreeContext, p BtreeHandle) (r int32) {
-	return 0
+	if p.IsNil() {
+		return 0
+	}
+	bt := e.btree(p)
+	bt.mu.Lock()
+	active := bt.backupCount != 0
+	bt.mu.Unlock()
+	return libc.BoolInt32(active)
 }
 
 func (e *minweightStorageEngine) BtreeSchema(ctx BtreeContext, p BtreeHandle, nBytes int32, __ccgo_fp_xFree BtreeFunctionHandle) (r BtreeSchemaHandle) {

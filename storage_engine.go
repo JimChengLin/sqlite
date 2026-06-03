@@ -33,6 +33,10 @@ type StorageEngineBtreeIntegrityCheckFreebsd386 = sqlite3.StorageEngineBtreeInte
 // netbsd/amd64 where BtreeIntegrityCheck uses that platform's ABI.
 type StorageEngineBtreeIntegrityCheckNetbsdAmd64 = sqlite3.StorageEngineBtreeIntegrityCheckNetbsdAmd64
 
+// StorageEngineLogicalBackup is implemented by engines that model logical
+// backup source state outside SQLite's native btree.
+type StorageEngineLogicalBackup = sqlite3.StorageEngineLogicalBackup
+
 // BtreeContext is the per-call SQLite runtime context seen by storage engines.
 type BtreeContext = sqlite3.BtreeContext
 
