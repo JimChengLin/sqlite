@@ -430,6 +430,31 @@ func TestMinweightCursorHintFlags(t *testing.T) {
 	}
 }
 
+func TestMinweightCursorPinTogglesRawFlag(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	cursor := h.cursor(t, true)
+	raw := (*BtCursor)(unsafe.Pointer(cursor.ptr))
+	if raw.FcurFlags&uint8(BTCF_WriteFlag) == 0 {
+		t.Fatalf("raw cursor flags = %d, want BTCF_WriteFlag set", raw.FcurFlags)
+	}
+
+	h.engine.BtreeCursorPin(h.ctx, cursor)
+	if raw.FcurFlags&uint8(BTCF_Pinned) == 0 {
+		t.Fatalf("raw cursor flags after pin = %d, want BTCF_Pinned set", raw.FcurFlags)
+	}
+	if raw.FcurFlags&uint8(BTCF_WriteFlag) == 0 {
+		t.Fatalf("raw cursor flags after pin = %d, want BTCF_WriteFlag preserved", raw.FcurFlags)
+	}
+
+	h.engine.BtreeCursorUnpin(h.ctx, cursor)
+	if raw.FcurFlags&uint8(BTCF_Pinned) != 0 {
+		t.Fatalf("raw cursor flags after unpin = %d, want BTCF_Pinned clear", raw.FcurFlags)
+	}
+	if raw.FcurFlags&uint8(BTCF_WriteFlag) == 0 {
+		t.Fatalf("raw cursor flags after unpin = %d, want BTCF_WriteFlag preserved", raw.FcurFlags)
+	}
+}
+
 func TestMinweightIncrblobCursorInvalidatedByReplace(t *testing.T) {
 	h := newMinweightBtreeTestHarness(t)
 	h.putRow(t, 1, []byte("abc"))

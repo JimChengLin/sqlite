@@ -1511,8 +1511,12 @@ func (e *minweightStorageEngine) BtreeIntegerKey(ctx BtreeContext, pCur BtreeCur
 	return row.rowid
 }
 
-func (e *minweightStorageEngine) BtreeCursorPin(ctx BtreeContext, pCur BtreeCursorHandle)   {}
-func (e *minweightStorageEngine) BtreeCursorUnpin(ctx BtreeContext, pCur BtreeCursorHandle) {}
+func (e *minweightStorageEngine) BtreeCursorPin(ctx BtreeContext, pCur BtreeCursorHandle) {
+	(*BtCursor)(unsafe.Pointer(pCur.ptr)).FcurFlags |= uint8(BTCF_Pinned)
+}
+func (e *minweightStorageEngine) BtreeCursorUnpin(ctx BtreeContext, pCur BtreeCursorHandle) {
+	(*BtCursor)(unsafe.Pointer(pCur.ptr)).FcurFlags &^= uint8(BTCF_Pinned)
+}
 func (e *minweightStorageEngine) BtreeOffset(ctx BtreeContext, pCur BtreeCursorHandle) (r int64) {
 	return 0
 }
