@@ -74,13 +74,15 @@ Broad top-level minweight check without the two context-expiration stress subtes
 ./test-minweight-broad.sh
 ```
 
-Latest broad run: 100.182s on 2026-06-04 with `-p 8 -parallel 8`. Run this after non-interrupt engine behavior changes when the full context stress coverage is not the point.
+Latest broad run: 100.182s on 2026-06-04 with `-p 8 -parallel 8`. Run this after non-interrupt engine behavior changes when the full context stress coverage is not the point. The broad script skips only `TestRegisteredFunctions/QueryContext_with_context_expiring` and `TestRegisteredFunctions/ExecContext_with_context_expiring`.
 
 Full top-level minweight check, run after broad engine semantics changes, context-interrupt changes, or before larger milestones:
 
 ```sh
-env SQLITE_TEST_STORAGE_ENGINE=minweight TEST_PARALLEL=8 GOCACHE=${TMPDIR:-/tmp}/sqlite-go-cache go test -p 8 -parallel 8 -timeout 10m ./
+./test-minweight-full.sh
 ```
+
+Latest full run: 499.835s on 2026-06-04 with `-p 8 -parallel 8`.
 
 Native btree storage-engine check:
 
@@ -95,7 +97,7 @@ Do not run the full `TestRegisteredFunctions` with a 180s timeout as a routine n
 - `TestRegisteredFunctions/QueryContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Verified under minweight on 2026-06-03; keep it out of the focused script and run it only when specifically checking interrupt behavior.
 - `TestRegisteredFunctions/ExecContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Verified under minweight on 2026-06-03; keep it out of the focused script and run it only when specifically checking interrupt behavior.
 - `TestIssue53`: passes under minweight but takes about 13s on darwin/arm64. Keep it out of the focused script; run it in full minweight checks or when index seek/order code changes.
-- Full `env SQLITE_TEST_STORAGE_ENGINE=minweight go test ./`: currently about 8m20s on darwin/arm64 because it includes the two expiring-context stress tests. Latest full run: 501.166s on 2026-06-04 with `-p 8 -parallel 8`. Run after broad engine changes or before larger milestones, not after every narrow commit.
+- Full `./test-minweight-full.sh`: currently about 8m20s on darwin/arm64 because it includes the two expiring-context stress tests. Latest full run: 499.835s on 2026-06-04 with `-p 8 -parallel 8`. Run after broad engine changes or before larger milestones, not after every narrow commit.
 - `./test-storage-engine.sh`: includes cross-target lib test-binary compilation matrix. Run before commit, not after each narrow code edit.
 
 ## Minweight-Specific Skips
