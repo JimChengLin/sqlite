@@ -62,6 +62,7 @@ type minweightDatabase struct {
 	readers       map[*minweightBtree]bool
 	writer        *minweightBtree
 	sharedRefs    int32
+	tableLocks    map[uint32]map[*minweightBtree]uint8
 }
 
 type minweightBtree struct {
@@ -194,6 +195,7 @@ func minweightNewDatabase() *minweightDatabase {
 		pageSize:     SQLITE_DEFAULT_PAGE_SIZE,
 		maxPageCount: SQLITE_MAX_PAGE_COUNT,
 		readers:      map[*minweightBtree]bool{},
+		tableLocks:   map[uint32]map[*minweightBtree]uint8{},
 	}
 }
 
@@ -628,6 +630,56 @@ func (bt *minweightBtree) connectionCount() int32 {
 	return sharedRefs
 }
 
+func (bt *minweightBtree) queryTableLockLocked(root uint32, lock uint8) int32 {
+	if !bt.sharable {
+		return SQLITE_OK
+	}
+	for holder, held := range bt.tableLocks[root] {
+		if holder != bt && held != lock {
+			return SQLITE_LOCKED_SHAREDCACHE
+		}
+	}
+	return SQLITE_OK
+}
+
+func (bt *minweightBtree) lockTable(root uint32, lock uint8) int32 {
+	if !bt.sharable {
+		return SQLITE_OK
+	}
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	if rc := bt.queryTableLockLocked(root, lock); rc != SQLITE_OK {
+		return rc
+	}
+	holders := bt.tableLocks[root]
+	if holders == nil {
+		holders = map[*minweightBtree]uint8{}
+		bt.tableLocks[root] = holders
+	}
+	if holders[bt] < lock {
+		holders[bt] = lock
+	}
+	return SQLITE_OK
+}
+
+func (bt *minweightBtree) schemaLocked() int32 {
+	if !bt.sharable {
+		return SQLITE_OK
+	}
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	return bt.queryTableLockLocked(uint32(SCHEMA_ROOT), uint8(READ_LOCK))
+}
+
+func (bt *minweightBtree) clearTableLocksLocked() {
+	for root, holders := range bt.tableLocks {
+		delete(holders, bt)
+		if len(holders) == 0 {
+			delete(bt.tableLocks, root)
+		}
+	}
+}
+
 func (bt *minweightBtree) walFilename() string {
 	if bt.filename == 0 {
 		return ""
@@ -684,6 +736,7 @@ func (bt *minweightBtree) releaseTrans() {
 	if bt.writer == bt {
 		bt.writer = nil
 	}
+	bt.clearTableLocksLocked()
 	bt.txnState = SQLITE_TXN_NONE
 	bt.txSnapshot = nil
 	bt.savepoints = nil
@@ -1259,6 +1312,11 @@ func (e *minweightStorageEngine) BtreeBeginTrans(ctx BtreeContext, p BtreeHandle
 		if rc := bt.ensureWritable(); rc != SQLITE_OK {
 			return rc
 		}
+	}
+	if rc := bt.lockTable(uint32(SCHEMA_ROOT), uint8(READ_LOCK)); rc != SQLITE_OK {
+		return rc
+	}
+	if wrflag != 0 {
 		if err := bt.ensureTransactionSnapshot(); err != nil {
 			return minweightSQLiteError(err)
 		}
@@ -2102,10 +2160,10 @@ func (e *minweightStorageEngine) BtreeSchema(ctx BtreeContext, p BtreeHandle, nB
 }
 
 func (e *minweightStorageEngine) BtreeSchemaLocked(ctx BtreeContext, p BtreeHandle) (r int32) {
-	return SQLITE_OK
+	return e.btree(p).schemaLocked()
 }
 func (e *minweightStorageEngine) BtreeLockTable(ctx BtreeContext, p BtreeHandle, iTab int32, isWriteLock uint8) (r int32) {
-	return SQLITE_OK
+	return e.btree(p).lockTable(uint32(iTab), uint8(READ_LOCK)+isWriteLock)
 }
 func (e *minweightStorageEngine) BtreePutData(ctx BtreeContext, pCsr BtreeCursorHandle, offset uint32, amt uint32, z BtreeMemoryHandle) (r int32) {
 	cur := e.cursor(pCsr)

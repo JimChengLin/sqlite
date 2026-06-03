@@ -39,6 +39,7 @@ Last updated: 2026-06-04.
 - Matched incremental blob cursor invalidation: replacing/deleting a row, or clearing/dropping an int-key table, expires matching open blob cursors so checked blob read/write returns `SQLITE_ABORT`.
 - Matched `BtreeTripAllCursors` faulting for minweight cursors, including `writeOnly` filtering and rollback trip-code propagation through `BtreeRollback`.
 - Matched minweight shared-cache handle metadata for `BtreeSharable` and `BtreeConnectionCount`: shared-cache handles report the current shared refcount, while private-cache handles report 1 like native btree.
+- Matched minweight shared-cache table locking for `BtreeLockTable` and `BtreeSchemaLocked`: read locks can coexist, conflicting read/write locks return `SQLITE_LOCKED_SHAREDCACHE`, and transaction end releases the handle's locks.
 
 ## Focused Test Policy
 

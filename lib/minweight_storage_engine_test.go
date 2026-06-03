@@ -277,6 +277,90 @@ func TestMinweightOpenTracksSharedCacheConnectionCount(t *testing.T) {
 	closeBtree(t, private2)
 }
 
+func TestMinweightSharedCacheTableLocks(t *testing.T) {
+	tls := libc.NewTLS()
+	defer tls.Close()
+	if rc := Xsqlite3_initialize(tls); rc != SQLITE_OK {
+		t.Fatalf("sqlite3_initialize rc = %d, want SQLITE_OK", rc)
+	}
+
+	engine := NewMinweightStorageEngine().(*minweightStorageEngine)
+	ctx := BtreeContext{tls: tls}
+	filename := filepath.Join(t.TempDir(), "locks.db")
+	zFilename := minweightAllocCString(ctx, filename)
+	if zFilename == 0 {
+		t.Fatal("minweightAllocCString returned 0")
+	}
+	defer Xsqlite3_free(tls, zFilename)
+
+	open := func(t *testing.T) BtreeHandle {
+		t.Helper()
+		var token uintptr
+		rc := engine.BtreeOpen(
+			ctx,
+			BtreeVFSHandle{},
+			BtreeCStringHandle{tls: tls, ptr: zFilename},
+			SQLiteHandle{},
+			BtreeMemoryHandle{tls: tls, ptr: uintptr(unsafe.Pointer(&token))},
+			0,
+			int32(SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_SHAREDCACHE),
+		)
+		if rc != SQLITE_OK {
+			t.Fatalf("BtreeOpen rc = %d, want SQLITE_OK", rc)
+		}
+		return BtreeHandle{tls: tls, ptr: token}
+	}
+	closeBtree := func(t *testing.T, btree BtreeHandle) {
+		t.Helper()
+		if rc := engine.BtreeClose(ctx, btree); rc != SQLITE_OK {
+			t.Fatalf("BtreeClose rc = %d, want SQLITE_OK", rc)
+		}
+	}
+
+	first := open(t)
+	second := open(t)
+	if rc := engine.BtreeBeginTrans(ctx, first, 0, BtreeMemoryHandle{}); rc != SQLITE_OK {
+		t.Fatalf("first BtreeBeginTrans rc = %d, want SQLITE_OK", rc)
+	}
+	if rc := engine.BtreeBeginTrans(ctx, second, 0, BtreeMemoryHandle{}); rc != SQLITE_OK {
+		t.Fatalf("second BtreeBeginTrans rc = %d, want SQLITE_OK", rc)
+	}
+	if rc := engine.BtreeLockTable(ctx, first, 2, 0); rc != SQLITE_OK {
+		t.Fatalf("first read lock rc = %d, want SQLITE_OK", rc)
+	}
+	if rc := engine.BtreeLockTable(ctx, second, 2, 0); rc != SQLITE_OK {
+		t.Fatalf("second read lock rc = %d, want SQLITE_OK", rc)
+	}
+	if rc := engine.BtreeLockTable(ctx, second, 2, 1); rc != SQLITE_LOCKED_SHAREDCACHE {
+		t.Fatalf("second write lock rc = %d, want SQLITE_LOCKED_SHAREDCACHE", rc)
+	}
+	if rc := engine.BtreeCommit(ctx, first); rc != SQLITE_OK {
+		t.Fatalf("first BtreeCommit rc = %d, want SQLITE_OK", rc)
+	}
+	if rc := engine.BtreeLockTable(ctx, second, 2, 1); rc != SQLITE_OK {
+		t.Fatalf("second write lock after release rc = %d, want SQLITE_OK", rc)
+	}
+	closeBtree(t, first)
+	closeBtree(t, second)
+
+	schemaWriter := open(t)
+	schemaReader := open(t)
+	if rc := engine.BtreeLockTable(ctx, schemaWriter, SCHEMA_ROOT, 1); rc != SQLITE_OK {
+		t.Fatalf("schema write lock rc = %d, want SQLITE_OK", rc)
+	}
+	if rc := engine.BtreeSchemaLocked(ctx, schemaReader); rc != SQLITE_LOCKED_SHAREDCACHE {
+		t.Fatalf("schema locked rc = %d, want SQLITE_LOCKED_SHAREDCACHE", rc)
+	}
+	if rc := engine.BtreeCommit(ctx, schemaWriter); rc != SQLITE_OK {
+		t.Fatalf("schema writer BtreeCommit rc = %d, want SQLITE_OK", rc)
+	}
+	if rc := engine.BtreeSchemaLocked(ctx, schemaReader); rc != SQLITE_OK {
+		t.Fatalf("schema locked after release rc = %d, want SQLITE_OK", rc)
+	}
+	closeBtree(t, schemaWriter)
+	closeBtree(t, schemaReader)
+}
+
 func TestMinweightIncrblobCursorInvalidatedByReplace(t *testing.T) {
 	h := newMinweightBtreeTestHarness(t)
 	h.putRow(t, 1, []byte("abc"))
