@@ -1344,6 +1344,49 @@ func (e *minweightStorageEngine) FinishLogicalBackup(ctx BtreeContext, db SQLite
 	return SQLITE_OK
 }
 
+func (e *minweightStorageEngine) SaveLogicalMetadata(ctx BtreeContext, db SQLiteHandle) (StorageEngineLogicalMetadata, int32) {
+	bt := e.btreeForDB(db)
+	if bt == nil {
+		return StorageEngineLogicalMetadata{}, SQLITE_ERROR
+	}
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	return StorageEngineLogicalMetadata{
+		NextRoot:  bt.next,
+		FreeRoots: minweightCloneRootList(bt.freeRoots),
+	}, SQLITE_OK
+}
+
+func (e *minweightStorageEngine) RestoreLogicalMetadata(ctx BtreeContext, db SQLiteHandle, meta StorageEngineLogicalMetadata) int32 {
+	bt := e.btreeForDB(db)
+	if bt == nil {
+		return SQLITE_ERROR
+	}
+	if meta.NextRoot < uint32(SCHEMA_ROOT) {
+		return SQLITE_CORRUPT
+	}
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	seen := map[uint32]bool{}
+	for root := range bt.tables {
+		if root > meta.NextRoot {
+			return SQLITE_CORRUPT
+		}
+		seen[root] = true
+	}
+	freeRoots := minweightCloneRootList(meta.FreeRoots)
+	for _, root := range freeRoots {
+		if root <= uint32(SCHEMA_ROOT) || root > meta.NextRoot || seen[root] {
+			return SQLITE_CORRUPT
+		}
+		seen[root] = true
+	}
+	bt.next = meta.NextRoot
+	bt.freeRoots = freeRoots
+	bt.meta[BTREE_LARGEST_ROOT_PAGE] = meta.NextRoot
+	return SQLITE_OK
+}
+
 func (e *minweightStorageEngine) BtreeSetCacheSize(ctx BtreeContext, p BtreeHandle, mxPage int32) (r int32) {
 	bt := e.btree(p)
 	bt.mu.Lock()

@@ -14,14 +14,17 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const logicalSerializeMagic = "modernc.org/sqlite logical serialize v1\n"
 
 type logicalSerializedDatabase struct {
-	Settings *logicalSerializedSettings `json:"settings,omitempty"`
-	Schema   []logicalSerializedSchema  `json:"schema"`
-	Tables   []logicalSerializedTable   `json:"tables"`
+	Settings *logicalSerializedSettings     `json:"settings,omitempty"`
+	Storage  *logicalSerializedStorageState `json:"storage,omitempty"`
+	Schema   []logicalSerializedSchema      `json:"schema"`
+	Tables   []logicalSerializedTable       `json:"tables"`
 }
 
 type logicalSerializedSettings struct {
@@ -29,6 +32,11 @@ type logicalSerializedSettings struct {
 	AutoVacuum   int64 `json:"autoVacuum"`
 	SecureDelete int64 `json:"secureDelete"`
 	MaxPageCount int64 `json:"maxPageCount"`
+}
+
+type logicalSerializedStorageState struct {
+	NextRoot  uint32   `json:"nextRoot,omitempty"`
+	FreeRoots []uint32 `json:"freeRoots,omitempty"`
 }
 
 type logicalSerializedSchema struct {
@@ -62,6 +70,11 @@ func logicalSerialize(c *conn) ([]byte, error) {
 		return nil, err
 	}
 	db.Settings = settings
+	storage, err := logicalSerializeStorageState(c)
+	if err != nil {
+		return nil, err
+	}
+	db.Storage = storage
 	schema, err := logicalSerializeSchema(c)
 	if err != nil {
 		return nil, err
@@ -120,6 +133,11 @@ func logicalDeserialize(c *conn, buf []byte) error {
 	}
 	if err := logicalDeserializeNonTables(c, db.Schema, fillers); err != nil {
 		return err
+	}
+	if db.Storage != nil {
+		if err := logicalDeserializeStorageState(c, *db.Storage); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -192,6 +210,34 @@ func logicalSecureDeletePragmaValue(v int64) string {
 		return "ON"
 	}
 	return "OFF"
+}
+
+func logicalSerializeStorageState(c *conn) (*logicalSerializedStorageState, error) {
+	meta, ok, rc := sqlite3.StorageEngineSaveLogicalMetadata(c.tls, c.db)
+	if rc != sqlite3.SQLITE_OK {
+		return nil, errstrForDB(c.tls, rc, c.db)
+	}
+	if !ok {
+		return nil, nil
+	}
+	return &logicalSerializedStorageState{
+		NextRoot:  meta.NextRoot,
+		FreeRoots: append([]uint32(nil), meta.FreeRoots...),
+	}, nil
+}
+
+func logicalDeserializeStorageState(c *conn, state logicalSerializedStorageState) error {
+	ok, rc := sqlite3.StorageEngineRestoreLogicalMetadata(c.tls, c.db, sqlite3.StorageEngineLogicalMetadata{
+		NextRoot:  state.NextRoot,
+		FreeRoots: append([]uint32(nil), state.FreeRoots...),
+	})
+	if rc != sqlite3.SQLITE_OK {
+		return errstrForDB(c.tls, rc, c.db)
+	}
+	if !ok {
+		return fmt.Errorf("sqlite: storage engine does not restore logical metadata")
+	}
+	return nil
 }
 
 func logicalSerializeSchema(c *conn) ([]logicalSerializedSchema, error) {

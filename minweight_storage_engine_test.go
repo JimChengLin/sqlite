@@ -950,6 +950,157 @@ func TestMinweightStorageEngineLogicalBackupRestorePreservesIndexRootBelowTable(
 	}
 }
 
+func TestMinweightStorageEngineLogicalRoundTripPreservesFreelistReuseOrder(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	type serializer interface {
+		Serialize() ([]byte, error)
+		Deserialize([]byte) error
+	}
+	type backuper interface {
+		NewBackup(string) (*sqlite.Backup, error)
+		NewRestore(string) (*sqlite.Backup, error)
+	}
+
+	src, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+
+	execMinweightSQL(t, src, "CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, src, "CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, src, "CREATE TABLE c(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, src, "DROP TABLE a")
+	execMinweightSQL(t, src, "DROP TABLE b")
+	execMinweightSQL(t, src, "INSERT INTO c(id, v) VALUES (1, 'keep')")
+
+	if got := minweightRootPages(t, src, "c"); !reflect.DeepEqual(got, map[string]int{"c": 4}) {
+		t.Fatalf("source rootpages = %v, want c root 4", got)
+	}
+
+	var snapshot []byte
+	srcConn, err := src.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srcConn.Raw(func(dc any) error {
+		var err error
+		snapshot, err = dc.(serializer).Serialize()
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	tmpDir := t.TempDir()
+	backupPath := filepath.Join(tmpDir, "freelist.db")
+	restorePath := filepath.Join(tmpDir, "freelist-restore.db")
+	if err := srcConn.Raw(func(dc any) error {
+		bck, err := dc.(backuper).NewBackup(backupPath)
+		if err != nil {
+			return err
+		}
+		for more := true; more; {
+			more, err = bck.Step(-1)
+			if err != nil {
+				return err
+			}
+		}
+		return bck.Finish()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srcConn.Raw(func(dc any) error {
+		bck, err := dc.(backuper).NewBackup(restorePath)
+		if err != nil {
+			return err
+		}
+		for more := true; more; {
+			more, err = bck.Step(-1)
+			if err != nil {
+				return err
+			}
+		}
+		return bck.Finish()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srcConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	execMinweightSQL(t, src, "CREATE TABLE d(id INTEGER PRIMARY KEY, v TEXT)")
+	if got := minweightRootPages(t, src, "d"); !reflect.DeepEqual(got, map[string]int{"d": 3}) {
+		t.Fatalf("source next reused rootpages = %v, want d root 3", got)
+	}
+
+	dstSerialize, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dstSerialize.Close()
+	dstSerializeConn, err := dstSerialize.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dstSerializeConn.Raw(func(dc any) error {
+		return dc.(serializer).Deserialize(snapshot)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dstSerializeConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	execMinweightSQL(t, dstSerialize, "CREATE TABLE d(id INTEGER PRIMARY KEY, v TEXT)")
+	if got := minweightRootPages(t, dstSerialize, "c", "d"); !reflect.DeepEqual(got, map[string]int{"c": 4, "d": 3}) {
+		t.Fatalf("deserialized next reused rootpages = %v, want c root 4 and d root 3", got)
+	}
+
+	dstBackup, err := sql.Open("sqlite", backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execMinweightSQL(t, dstBackup, "CREATE TABLE d(id INTEGER PRIMARY KEY, v TEXT)")
+	if got := minweightRootPages(t, dstBackup, "c", "d"); !reflect.DeepEqual(got, map[string]int{"c": 4, "d": 3}) {
+		t.Fatalf("backup next reused rootpages = %v, want c root 4 and d root 3", got)
+	}
+	if err := dstBackup.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dstRestore, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dstRestore.Close()
+	dstRestoreConn, err := dstRestore.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dstRestoreConn.Raw(func(dc any) error {
+		bck, err := dc.(backuper).NewRestore(restorePath)
+		if err != nil {
+			return err
+		}
+		for more := true; more; {
+			more, err = bck.Step(-1)
+			if err != nil {
+				return err
+			}
+		}
+		return bck.Finish()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dstRestoreConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	execMinweightSQL(t, dstRestore, "CREATE TABLE d(id INTEGER PRIMARY KEY, v TEXT)")
+	if got := minweightRootPages(t, dstRestore, "c", "d"); !reflect.DeepEqual(got, map[string]int{"c": 4, "d": 3}) {
+		t.Fatalf("restored next reused rootpages = %v, want c root 4 and d root 3", got)
+	}
+}
+
 func TestMinweightStorageEngineTransactionRollbackRestoresRows(t *testing.T) {
 	installMinweightStorageEngineForTest(t)
 

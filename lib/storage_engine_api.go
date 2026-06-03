@@ -148,6 +148,20 @@ type StorageEngineLogicalBackup interface {
 	FinishLogicalBackup(ctx BtreeContext, db SQLiteHandle) int32
 }
 
+// StorageEngineLogicalMetadata is the logical btree state needed to make
+// future root-page allocation match after a logical serialize or backup.
+type StorageEngineLogicalMetadata struct {
+	NextRoot  uint32
+	FreeRoots []uint32
+}
+
+// StorageEngineLogicalMetadataProvider is implemented by engines whose
+// logical serialize/backup path needs to preserve hidden allocation state.
+type StorageEngineLogicalMetadataProvider interface {
+	SaveLogicalMetadata(ctx BtreeContext, db SQLiteHandle) (StorageEngineLogicalMetadata, int32)
+	RestoreLogicalMetadata(ctx BtreeContext, db SQLiteHandle, meta StorageEngineLogicalMetadata) int32
+}
+
 type nativeBtreeStorageEngine struct{}
 
 type storageEngineHolder struct {
@@ -201,6 +215,23 @@ func StorageEngineFinishLogicalBackup(tls *libc.TLS, db uintptr) int32 {
 		return SQLITE_ERROR
 	}
 	return engine.FinishLogicalBackup(btreeContext(tls), sqliteHandle(tls, db))
+}
+
+func StorageEngineSaveLogicalMetadata(tls *libc.TLS, db uintptr) (StorageEngineLogicalMetadata, bool, int32) {
+	engine, ok := storageEngine().(StorageEngineLogicalMetadataProvider)
+	if !ok {
+		return StorageEngineLogicalMetadata{}, false, SQLITE_OK
+	}
+	meta, rc := engine.SaveLogicalMetadata(btreeContext(tls), sqliteHandle(tls, db))
+	return meta, true, rc
+}
+
+func StorageEngineRestoreLogicalMetadata(tls *libc.TLS, db uintptr, meta StorageEngineLogicalMetadata) (bool, int32) {
+	engine, ok := storageEngine().(StorageEngineLogicalMetadataProvider)
+	if !ok {
+		return false, SQLITE_OK
+	}
+	return true, engine.RestoreLogicalMetadata(btreeContext(tls), sqliteHandle(tls, db), meta)
 }
 
 // BtreeContext is the per-call SQLite runtime context seen by storage engines.

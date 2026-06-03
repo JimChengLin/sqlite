@@ -246,6 +246,10 @@ func logicalBackupPageCount(src *conn) (int, error) {
 }
 
 func logicalBackupCopy(src *conn, dst *conn) (err error) {
+	storage, err := logicalSerializeStorageState(src)
+	if err != nil {
+		return fmt.Errorf("sqlite: logical backup save storage state: %w", err)
+	}
 	if err := logicalBackupExec(dst, "PRAGMA foreign_keys=OFF"); err != nil {
 		return fmt.Errorf("sqlite: logical backup disable foreign_keys: %w", err)
 	}
@@ -260,6 +264,11 @@ func logicalBackupCopy(src *conn, dst *conn) (err error) {
 	}
 	if err := logicalBackupCopyRows(src, dst); err != nil {
 		return fmt.Errorf("sqlite: logical backup copy rows: %w", err)
+	}
+	if storage != nil {
+		if err := logicalDeserializeStorageState(dst, *storage); err != nil {
+			return fmt.Errorf("sqlite: logical backup restore storage state: %w", err)
+		}
 	}
 	return nil
 }
