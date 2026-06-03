@@ -3,6 +3,7 @@ module modernc.org/sqlite
 go 1.25.0
 
 require (
+	github.com/JimChengLin/minweight_store v0.0.0
 	github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e
 	golang.org/x/sys v0.42.0
 	modernc.org/fileutil v1.4.0
@@ -10,12 +11,23 @@ require (
 	modernc.org/mathutil v1.7.1
 )
 
+replace github.com/JimChengLin/minweight_store => ../minweight_store
+
 require (
+	github.com/JimChengLin/minpatricia v0.0.0-20260531035544-2d1ddf70ce81 // indirect
+	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/parquet-go/bitpack v1.0.0 // indirect
+	github.com/parquet-go/jsonlite v1.0.0 // indirect
+	github.com/parquet-go/parquet-go v0.30.1 // indirect
+	github.com/pierrec/lz4/v4 v4.1.21 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/twpayne/go-geom v1.6.1 // indirect
+	google.golang.org/protobuf v1.34.2 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
 
