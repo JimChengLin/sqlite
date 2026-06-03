@@ -364,6 +364,54 @@ func TestMinweightStorageEngineLogicalSerializeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMinweightStorageEngineVacuumTransfersRows(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	execMinweightSQL(t, db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT NOT NULL, n INTEGER)")
+	execMinweightSQL(t, db, "CREATE UNIQUE INDEX t_v ON t(v)")
+	execMinweightSQL(t, db, "INSERT INTO t(id, v, n) VALUES (1, 'a', 10), (2, 'b', 20), (5, 'e', 50)")
+
+	execMinweightSQL(t, db, "VACUUM")
+
+	rows, err := db.Query("SELECT id, v, n FROM t INDEXED BY t_v ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var id int
+		var v string
+		var n int
+		if err := rows.Scan(&id, &v, &n); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, strconv.Itoa(id)+":"+v+":"+strconv.Itoa(n))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"1:a:10", "2:b:20", "5:e:50"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("rows = %v, want %v", got, want)
+	}
+
+	var id int
+	if err := db.QueryRow("SELECT id FROM t WHERE v = 'b'").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if id != 2 {
+		t.Fatalf("id for v=b = %d, want 2", id)
+	}
+}
+
 func TestMinweightStorageEngineTransactionRollbackRestoresRows(t *testing.T) {
 	installMinweightStorageEngineForTest(t)
 
