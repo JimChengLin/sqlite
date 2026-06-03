@@ -94,6 +94,7 @@ type minweightCursor struct {
 	rows           []minweightRow
 	index          int
 	valid          bool
+	writable       bool
 	dataVer        uint32
 	lastRow        minweightRow
 	hasLastRow     bool
@@ -1281,10 +1282,11 @@ func (e *minweightStorageEngine) BtreeCursor(ctx BtreeContext, p BtreeHandle, iT
 	(*BtCursor)(unsafe.Pointer(pCur.ptr)).FpKeyInfo = pKeyInfo.ptr
 	(*BtCursor)(unsafe.Pointer(pCur.ptr)).FiPage = -1
 	cur := &minweightCursor{
-		btree:  bt,
-		root:   iTable,
-		intKey: table.intKey,
-		index:  -1,
+		btree:    bt,
+		root:     iTable,
+		intKey:   table.intKey,
+		writable: wrFlag != 0,
+		index:    -1,
 	}
 	e.mu.Lock()
 	e.cursors[pCur.ptr] = cur
@@ -1936,6 +1938,9 @@ func (e *minweightStorageEngine) BtreePutData(ctx BtreeContext, pCsr BtreeCursor
 	row, ok := cur.current()
 	if !ok || !cur.intKey {
 		return SQLITE_ERROR
+	}
+	if !cur.writable {
+		return SQLITE_READONLY
 	}
 	payload := append([]byte(nil), row.payload...)
 	end := uint64(offset) + uint64(amt)

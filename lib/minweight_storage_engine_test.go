@@ -189,3 +189,49 @@ func TestMinweightPutDataRejectsBlobGrowth(t *testing.T) {
 		t.Fatalf("payload = %q, want abc", got)
 	}
 }
+
+func TestMinweightPutDataRequiresWriteCursor(t *testing.T) {
+	tls := libc.NewTLS()
+	defer tls.Close()
+
+	engine := NewMinweightStorageEngine().(*minweightStorageEngine)
+	bt := &minweightBtree{minweightDatabase: minweightNewDatabase()}
+	engine.btrees[1] = bt
+	ctx := BtreeContext{tls: tls}
+	btree := BtreeHandle{tls: tls, ptr: 1}
+	var rawCursor BtCursor
+	cursor := BtreeCursorHandle{tls: tls, ptr: uintptr(unsafe.Pointer(&rawCursor))}
+
+	key := minweightTableKey(1, 1)
+	if err := bt.store.Put(key, []byte("abc")); err != nil {
+		t.Fatal(err)
+	}
+	bt.noteInsert(1, 1, false)
+
+	if rc := engine.BtreeCursor(ctx, btree, 1, 0, BtreeKeyInfoHandle{}, cursor); rc != SQLITE_OK {
+		t.Fatalf("BtreeCursor rc = %d, want SQLITE_OK", rc)
+	}
+	var moveResult int32
+	if rc := engine.BtreeTableMoveto(ctx, cursor, 1, 0, BtreeMemoryHandle{tls: tls, ptr: uintptr(unsafe.Pointer(&moveResult))}); rc != SQLITE_OK {
+		t.Fatalf("BtreeTableMoveto rc = %d, want SQLITE_OK", rc)
+	}
+	if moveResult != 0 {
+		t.Fatalf("moveResult = %d, want 0", moveResult)
+	}
+
+	data := []byte("z")
+	rc := engine.BtreePutData(ctx, cursor, 0, 1, BtreeMemoryHandle{tls: tls, ptr: uintptr(unsafe.Pointer(&data[0]))})
+	if rc != SQLITE_READONLY {
+		t.Fatalf("BtreePutData rc = %d, want SQLITE_READONLY", rc)
+	}
+	got, ok, err := bt.store.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("row disappeared")
+	}
+	if !bytes.Equal(got, []byte("abc")) {
+		t.Fatalf("payload = %q, want abc", got)
+	}
+}
