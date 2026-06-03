@@ -361,6 +361,48 @@ func TestMinweightSharedCacheTableLocks(t *testing.T) {
 	closeBtree(t, schemaReader)
 }
 
+func TestMinweightCheckpointLockedDuringTransaction(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+
+	if rc := h.engine.BtreeBeginTrans(h.ctx, h.btree, 1, BtreeMemoryHandle{}); rc != SQLITE_OK {
+		t.Fatalf("BtreeBeginTrans rc = %d, want SQLITE_OK", rc)
+	}
+	var nLog int32 = -1
+	var nCkpt int32 = -1
+	rc := h.engine.BtreeCheckpoint(
+		h.ctx,
+		h.btree,
+		SQLITE_CHECKPOINT_PASSIVE,
+		BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&nLog))},
+		BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&nCkpt))},
+	)
+	if rc != SQLITE_LOCKED {
+		t.Fatalf("BtreeCheckpoint during transaction rc = %d, want SQLITE_LOCKED", rc)
+	}
+	if nLog != 0 || nCkpt != 0 {
+		t.Fatalf("checkpoint counters = %d/%d, want 0/0", nLog, nCkpt)
+	}
+
+	if rc := h.engine.BtreeCommit(h.ctx, h.btree); rc != SQLITE_OK {
+		t.Fatalf("BtreeCommit rc = %d, want SQLITE_OK", rc)
+	}
+	nLog = -1
+	nCkpt = -1
+	rc = h.engine.BtreeCheckpoint(
+		h.ctx,
+		h.btree,
+		SQLITE_CHECKPOINT_PASSIVE,
+		BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&nLog))},
+		BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&nCkpt))},
+	)
+	if rc != SQLITE_OK {
+		t.Fatalf("BtreeCheckpoint after commit rc = %d, want SQLITE_OK", rc)
+	}
+	if nLog != 0 || nCkpt != 0 {
+		t.Fatalf("checkpoint counters after commit = %d/%d, want 0/0", nLog, nCkpt)
+	}
+}
+
 func TestMinweightIncrblobCursorInvalidatedByReplace(t *testing.T) {
 	h := newMinweightBtreeTestHarness(t)
 	h.putRow(t, 1, []byte("abc"))

@@ -680,6 +680,20 @@ func (bt *minweightBtree) clearTableLocksLocked() {
 	}
 }
 
+func (bt *minweightBtree) hasOpenTransaction() bool {
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	if bt.writer != nil || len(bt.readers) != 0 {
+		return true
+	}
+	for _, holders := range bt.tableLocks {
+		if len(holders) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (bt *minweightBtree) walFilename() string {
 	if bt.filename == 0 {
 		return ""
@@ -2144,6 +2158,9 @@ func (e *minweightStorageEngine) BtreeCheckpoint(ctx BtreeContext, p BtreeHandle
 	}
 	if !pnCkpt.IsNil() {
 		pnCkpt.PutInt32(0)
+	}
+	if !p.IsNil() && e.btree(p).hasOpenTransaction() {
+		return SQLITE_LOCKED
 	}
 	return SQLITE_OK
 }
