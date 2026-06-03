@@ -61,6 +61,7 @@ type minweightDatabase struct {
 	autoVacuum    int32
 	readers       map[*minweightBtree]bool
 	writer        *minweightBtree
+	sharedRefs    int32
 }
 
 type minweightBtree struct {
@@ -74,6 +75,7 @@ type minweightBtree struct {
 	db          uintptr
 	txnState    int32
 	readOnly    bool
+	sharable    bool
 	persistWAL  bool
 	walActive   bool
 	txSnapshot  *minweightSnapshot
@@ -593,6 +595,39 @@ func (bt *minweightBtree) ensureWritable() int32 {
 	return SQLITE_OK
 }
 
+func (bt *minweightBtree) retainConnection() {
+	if !bt.sharable {
+		return
+	}
+	bt.mu.Lock()
+	bt.sharedRefs++
+	bt.mu.Unlock()
+}
+
+func (bt *minweightBtree) releaseConnection() {
+	if !bt.sharable {
+		return
+	}
+	bt.mu.Lock()
+	if bt.sharedRefs > 0 {
+		bt.sharedRefs--
+	}
+	bt.mu.Unlock()
+}
+
+func (bt *minweightBtree) connectionCount() int32 {
+	if !bt.sharable {
+		return 1
+	}
+	bt.mu.Lock()
+	sharedRefs := bt.sharedRefs
+	bt.mu.Unlock()
+	if sharedRefs == 0 {
+		return 1
+	}
+	return sharedRefs
+}
+
 func (bt *minweightBtree) walFilename() string {
 	if bt.filename == 0 {
 		return ""
@@ -937,6 +972,7 @@ func (e *minweightStorageEngine) BtreeLastPage(ctx BtreeContext, p BtreeHandle) 
 func (e *minweightStorageEngine) BtreeOpen(ctx BtreeContext, pVfs BtreeVFSHandle, zFilename BtreeCStringHandle, db SQLiteHandle, ppBtree BtreeMemoryHandle, flags int32, vfsFlags int32) (r int32) {
 	key := minweightDatabaseKey(zFilename)
 	readOnly := vfsFlags&SQLITE_OPEN_READONLY != 0
+	sharable := vfsFlags&SQLITE_OPEN_SHAREDCACHE != 0
 	if key != "" {
 		if readOnly {
 			e.mu.Lock()
@@ -986,6 +1022,7 @@ func (e *minweightStorageEngine) BtreeOpen(ctx BtreeContext, pVfs BtreeVFSHandle
 		journalName:       journalName,
 		db:                db.ptr,
 		readOnly:          readOnly,
+		sharable:          sharable,
 	}
 	e.mu.Lock()
 	if key != "" {
@@ -1013,6 +1050,7 @@ func (e *minweightStorageEngine) BtreeOpen(ctx BtreeContext, pVfs BtreeVFSHandle
 		e.aliases[db.ptr] = token
 	}
 	e.mu.Unlock()
+	bt.retainConnection()
 	ppBtree.PutBtreeToken(BtreeToken(token))
 	return SQLITE_OK
 }
@@ -1052,6 +1090,7 @@ func (e *minweightStorageEngine) BtreeClose(ctx BtreeContext, p BtreeHandle) (r 
 		Xsqlite3_free(ctx.tls, bt.journalName)
 	}
 	if bt != nil {
+		bt.releaseConnection()
 		bt.releaseTrans()
 	}
 	return SQLITE_OK
@@ -2122,10 +2161,13 @@ func (e *minweightStorageEngine) BtreeIsReadonly(ctx BtreeContext, p BtreeHandle
 	return 0
 }
 func (e *minweightStorageEngine) BtreeSharable(ctx BtreeContext, p BtreeHandle) (r int32) {
+	if e.btree(p).sharable {
+		return 1
+	}
 	return 0
 }
 func (e *minweightStorageEngine) BtreeConnectionCount(ctx BtreeContext, p BtreeHandle) (r int32) {
-	return 1
+	return e.btree(p).connectionCount()
 }
 func (e *minweightStorageEngine) BtreeCopyFile(ctx BtreeContext, pTo BtreeHandle, pFrom BtreeHandle) (r int32) {
 	to := e.btree(pTo)

@@ -8,6 +8,7 @@ package sqlite3
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unsafe"
@@ -197,6 +198,83 @@ func TestMinweightCursorRestoreRefreshesChangedRow(t *testing.T) {
 	if got := engine.BtreeCursorHasMoved(ctx, cursor); got != 0 {
 		t.Fatalf("BtreeCursorHasMoved after restore = %d, want 0", got)
 	}
+}
+
+func TestMinweightOpenTracksSharedCacheConnectionCount(t *testing.T) {
+	tls := libc.NewTLS()
+	defer tls.Close()
+	if rc := Xsqlite3_initialize(tls); rc != SQLITE_OK {
+		t.Fatalf("sqlite3_initialize rc = %d, want SQLITE_OK", rc)
+	}
+
+	engine := NewMinweightStorageEngine().(*minweightStorageEngine)
+	ctx := BtreeContext{tls: tls}
+	filename := filepath.Join(t.TempDir(), "shared.db")
+	zFilename := minweightAllocCString(ctx, filename)
+	if zFilename == 0 {
+		t.Fatal("minweightAllocCString returned 0")
+	}
+	defer Xsqlite3_free(tls, zFilename)
+
+	open := func(t *testing.T, db uintptr, vfsFlags int32) BtreeHandle {
+		t.Helper()
+		var token uintptr
+		rc := engine.BtreeOpen(
+			ctx,
+			BtreeVFSHandle{},
+			BtreeCStringHandle{tls: tls, ptr: zFilename},
+			SQLiteHandle{tls: tls, ptr: db},
+			BtreeMemoryHandle{tls: tls, ptr: uintptr(unsafe.Pointer(&token))},
+			0,
+			vfsFlags,
+		)
+		if rc != SQLITE_OK {
+			t.Fatalf("BtreeOpen rc = %d, want SQLITE_OK", rc)
+		}
+		if token == 0 {
+			t.Fatal("BtreeOpen returned nil token")
+		}
+		return BtreeHandle{tls: tls, ptr: token}
+	}
+	closeBtree := func(t *testing.T, btree BtreeHandle) {
+		t.Helper()
+		if rc := engine.BtreeClose(ctx, btree); rc != SQLITE_OK {
+			t.Fatalf("BtreeClose rc = %d, want SQLITE_OK", rc)
+		}
+	}
+
+	sharedFlags := int32(SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_SHAREDCACHE)
+	shared1 := open(t, 101, sharedFlags)
+	shared2 := open(t, 102, sharedFlags)
+	if got := engine.BtreeSharable(ctx, shared1); got != 1 {
+		t.Fatalf("BtreeSharable(shared1) = %d, want 1", got)
+	}
+	if got := engine.BtreeConnectionCount(ctx, shared1); got != 2 {
+		t.Fatalf("BtreeConnectionCount(shared1) = %d, want 2", got)
+	}
+	if got := engine.BtreeConnectionCount(ctx, shared2); got != 2 {
+		t.Fatalf("BtreeConnectionCount(shared2) = %d, want 2", got)
+	}
+	closeBtree(t, shared1)
+	if got := engine.BtreeConnectionCount(ctx, shared2); got != 1 {
+		t.Fatalf("BtreeConnectionCount(shared2 after close) = %d, want 1", got)
+	}
+	closeBtree(t, shared2)
+
+	privateFlags := int32(SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE)
+	private1 := open(t, 201, privateFlags)
+	private2 := open(t, 202, privateFlags)
+	if got := engine.BtreeSharable(ctx, private1); got != 0 {
+		t.Fatalf("BtreeSharable(private1) = %d, want 0", got)
+	}
+	if got := engine.BtreeConnectionCount(ctx, private1); got != 1 {
+		t.Fatalf("BtreeConnectionCount(private1) = %d, want 1", got)
+	}
+	if got := engine.BtreeConnectionCount(ctx, private2); got != 1 {
+		t.Fatalf("BtreeConnectionCount(private2) = %d, want 1", got)
+	}
+	closeBtree(t, private1)
+	closeBtree(t, private2)
 }
 
 func TestMinweightIncrblobCursorInvalidatedByReplace(t *testing.T) {

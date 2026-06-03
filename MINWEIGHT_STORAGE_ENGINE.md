@@ -38,6 +38,7 @@ Last updated: 2026-06-04.
 - Matched incremental blob `BtreePutData` cursor permissions: writes through read-only cursors now return `SQLITE_READONLY` and leave the row unchanged.
 - Matched incremental blob cursor invalidation: replacing/deleting a row, or clearing/dropping an int-key table, expires matching open blob cursors so checked blob read/write returns `SQLITE_ABORT`.
 - Matched `BtreeTripAllCursors` faulting for minweight cursors, including `writeOnly` filtering and rollback trip-code propagation through `BtreeRollback`.
+- Matched minweight shared-cache handle metadata for `BtreeSharable` and `BtreeConnectionCount`: shared-cache handles report the current shared refcount, while private-cache handles report 1 like native btree.
 
 ## Focused Test Policy
 
