@@ -8,6 +8,7 @@ package sqlite3
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -67,5 +68,78 @@ func TestMinweightCursorRestoreRefreshesChangedRow(t *testing.T) {
 	}
 	if got := engine.BtreeCursorHasMoved(ctx, cursor); got != 0 {
 		t.Fatalf("BtreeCursorHasMoved after restore = %d, want 0", got)
+	}
+}
+
+func TestMinweightIntegrityCheckReportsLogicalCorruption(t *testing.T) {
+	tls := libc.NewTLS()
+	defer tls.Close()
+	if rc := Xsqlite3_initialize(tls); rc != SQLITE_OK {
+		t.Fatalf("sqlite3_initialize rc = %d, want SQLITE_OK", rc)
+	}
+
+	engine := NewMinweightStorageEngine().(*minweightStorageEngine)
+	bt := &minweightBtree{minweightDatabase: minweightNewDatabase()}
+	engine.btrees[1] = bt
+	ctx := BtreeContext{tls: tls}
+	btree := BtreeHandle{tls: tls, ptr: 1}
+
+	if err := bt.store.Put(minweightTableKey(1, 1), []byte("ok")); err != nil {
+		t.Fatal(err)
+	}
+	bt.noteInsert(1, 1, false)
+
+	var pnErr int32
+	var pzOut uintptr
+	if rc := engine.BtreeIntegrityCheck(
+		ctx,
+		SQLiteHandle{},
+		btree,
+		BtreeMemoryHandle{},
+		BtreeMemoryHandle{},
+		0,
+		100,
+		BtreeMemoryHandle{tls: tls, ptr: uintptr(unsafe.Pointer(&pnErr))},
+		BtreeMemoryHandle{tls: tls, ptr: uintptr(unsafe.Pointer(&pzOut))},
+	); rc != SQLITE_OK {
+		t.Fatalf("BtreeIntegrityCheck rc = %d, want SQLITE_OK", rc)
+	}
+	if pnErr != 0 {
+		t.Fatalf("pnErr = %d, want 0", pnErr)
+	}
+	if pzOut != 0 {
+		t.Fatalf("pzOut = %#x, want 0", pzOut)
+	}
+
+	bt.mu.Lock()
+	table := bt.tables[1]
+	table.rowCount = 2
+	bt.tables[1] = table
+	bt.mu.Unlock()
+
+	pnErr = 0
+	pzOut = 0
+	if rc := engine.BtreeIntegrityCheck(
+		ctx,
+		SQLiteHandle{},
+		btree,
+		BtreeMemoryHandle{},
+		BtreeMemoryHandle{},
+		0,
+		100,
+		BtreeMemoryHandle{tls: tls, ptr: uintptr(unsafe.Pointer(&pnErr))},
+		BtreeMemoryHandle{tls: tls, ptr: uintptr(unsafe.Pointer(&pzOut))},
+	); rc != SQLITE_OK {
+		t.Fatalf("BtreeIntegrityCheck rc = %d, want SQLITE_OK", rc)
+	}
+	if pnErr == 0 {
+		t.Fatal("pnErr = 0, want logical corruption")
+	}
+	if pzOut == 0 {
+		t.Fatal("pzOut = 0, want error text")
+	}
+	defer Xsqlite3_free(tls, pzOut)
+	if got := libc.GoString(pzOut); !strings.Contains(got, "row count metadata 2 != actual 1") {
+		t.Fatalf("integrity text = %q", got)
 	}
 }

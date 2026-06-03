@@ -33,6 +33,7 @@ Last updated: 2026-06-04.
 - Modeled minweight BTree PRAGMA state for page size, reserve bytes, max page count, secure delete, and auto-vacuum flags.
 - Extended minweight logical `Serialize`/`Deserialize` payloads with those BTree settings while keeping older logical payloads readable.
 - Matched minweight cursor moved/restore behavior for stale cursor snapshots so `OP_Column` and incremental-blob paths can refresh changed rows instead of reading old payloads.
+- Added minweight logical `BtreeIntegrityCheck`: it scans the minweight KV snapshot, validates table/index key shapes, root metadata, row counts, and int-key rowid bounds, then feeds row counts back to SQLite's `integrity_check` registers.
 
 ## Focused Test Policy
 
@@ -44,7 +45,9 @@ Routine minweight check:
 ./test-minweight-storage-engine.sh
 ```
 
-Full top-level minweight check, run after engine semantics change or before commit:
+This focused list includes `TestMinweightStorageEngineIntegrityCheck` plus the direct `./lib` minweight integrity/cursor tests.
+
+Full top-level minweight check, run after broad engine semantics changes or before larger milestones:
 
 ```sh
 env SQLITE_TEST_STORAGE_ENGINE=minweight TEST_PARALLEL=8 GOCACHE=${TMPDIR:-/tmp}/sqlite-go-cache go test -p 8 -parallel 8 -timeout 10m ./
@@ -75,4 +78,4 @@ These tests are intentionally skipped only when `SQLITE_TEST_STORAGE_ENGINE=minw
 
 ## TODO
 
-- Decide whether physical page features remain explicitly unsupported or get a page-file compatibility layer: `sqlite_dbpage`, VFS-backed DB files, valid WAL frame contents, and chmod-only read-only detection are in this bucket.
+- Decide whether physical page features remain explicitly unsupported or get a page-file compatibility layer: `sqlite_dbpage`, VFS-backed DB files, valid WAL frame contents, and chmod-only read-only detection are in this bucket. The current minweight integrity check is logical only and does not validate SQLite page images.

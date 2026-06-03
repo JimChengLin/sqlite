@@ -91,6 +91,27 @@ func TestMinweightStorageEngineUniqueTextLookup(t *testing.T) {
 	}
 }
 
+func TestMinweightStorageEngineIntegrityCheck(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	execMinweightSQL(t, db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT UNIQUE)")
+	execMinweightSQL(t, db, "INSERT INTO t(v) VALUES ('a'), ('b'), ('c')")
+
+	var got string
+	if err := db.QueryRow("PRAGMA integrity_check").Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "ok" {
+		t.Fatalf("integrity_check = %q, want ok", got)
+	}
+}
+
 func TestMinweightStorageEngineQueryRowMultiStatement(t *testing.T) {
 	installMinweightStorageEngineForTest(t)
 
