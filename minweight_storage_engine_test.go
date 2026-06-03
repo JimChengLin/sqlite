@@ -11,6 +11,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -845,6 +846,107 @@ func TestMinweightStorageEngineLogicalSerializePreservesIndexRootBelowTable(t *t
 	}
 	if got := minweightQueryInt(t, dst, "SELECT id FROM b INDEXED BY b_v WHERE v = 'two'"); got != 2 {
 		t.Fatalf("indexed lookup id = %d, want 2", got)
+	}
+}
+
+func TestMinweightStorageEngineLogicalBackupRestorePreservesIndexRootBelowTable(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	type backuper interface {
+		NewBackup(string) (*sqlite.Backup, error)
+		NewRestore(string) (*sqlite.Backup, error)
+	}
+
+	src, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+
+	execMinweightSQL(t, src, "CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, src, "CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, src, "DROP TABLE a")
+	execMinweightSQL(t, src, "CREATE INDEX b_v ON b(v)")
+	execMinweightSQL(t, src, "INSERT INTO b(id, v) VALUES (1, 'one'), (2, 'two')")
+
+	wantRootPages := map[string]int{"b": 3, "b_v": 2}
+	if got := minweightRootPages(t, src, "b", "b_v"); !reflect.DeepEqual(got, wantRootPages) {
+		t.Fatalf("source rootpages = %v, want %v", got, wantRootPages)
+	}
+
+	dstPath := filepath.Join(t.TempDir(), "backup.db")
+	srcConn, err := src.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srcConn.Raw(func(dc any) error {
+		bck, err := dc.(backuper).NewBackup(dstPath)
+		if err != nil {
+			return err
+		}
+		for more := true; more; {
+			more, err = bck.Step(-1)
+			if err != nil {
+				return err
+			}
+		}
+		return bck.Finish()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srcConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dst, err := sql.Open("sqlite", dstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := minweightRootPages(t, dst, "b", "b_v"); !reflect.DeepEqual(got, wantRootPages) {
+		t.Fatalf("backup rootpages = %v, want %v", got, wantRootPages)
+	}
+	if got := minweightQueryInt(t, dst, "SELECT id FROM b INDEXED BY b_v WHERE v = 'two'"); got != 2 {
+		t.Fatalf("backup indexed lookup id = %d, want 2", got)
+	}
+	if err := dst.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restored, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+
+	restoredConn, err := restored.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restoredConn.Raw(func(dc any) error {
+		bck, err := dc.(backuper).NewRestore(dstPath)
+		if err != nil {
+			return err
+		}
+		for more := true; more; {
+			more, err = bck.Step(-1)
+			if err != nil {
+				return err
+			}
+		}
+		return bck.Finish()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoredConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := minweightRootPages(t, restored, "b", "b_v"); !reflect.DeepEqual(got, wantRootPages) {
+		t.Fatalf("restored rootpages = %v, want %v", got, wantRootPages)
+	}
+	if got := minweightQueryInt(t, restored, "SELECT id FROM b INDEXED BY b_v WHERE v = 'two'"); got != 2 {
+		t.Fatalf("restored indexed lookup id = %d, want 2", got)
 	}
 }
 

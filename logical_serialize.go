@@ -195,6 +195,10 @@ func logicalSecureDeletePragmaValue(v int64) string {
 }
 
 func logicalSerializeSchema(c *conn) ([]logicalSerializedSchema, error) {
+	return logicalSchemaObjects(c)
+}
+
+func logicalSchemaObjects(c *conn) ([]logicalSerializedSchema, error) {
 	rows, err := logicalBackupQuery(c, `
 		SELECT type, name, tbl_name, rootpage, sql
 		FROM sqlite_schema
@@ -251,15 +255,15 @@ func logicalDeserializeTables(c *conn, schema []logicalSerializedSchema) (map[in
 		}
 		if preserveRootPages && object.RootPage > 0 {
 			if err := logicalReserveRootPagesBefore(c, object.RootPage, fillers, usedNames); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("sqlite: reserve roots before %s %s: %w", object.Type, object.Name, err)
 			}
 		}
 		if err := logicalBackupExec(c, object.SQL); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("sqlite: replay %s %s: %w", object.Type, object.Name, err)
 		}
 		if preserveRootPages && object.RootPage > 0 {
 			if err := logicalCheckObjectRootPage(c, object.Name, object.RootPage); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("sqlite: replay %s %s rootpage: %w", object.Type, object.Name, err)
 			}
 		}
 	}
@@ -275,17 +279,17 @@ func logicalDeserializeNonTables(c *conn, schema []logicalSerializedSchema, fill
 		if preserveRootPages && object.RootPage > 0 {
 			if filler := fillers[object.RootPage]; filler != "" {
 				if err := logicalBackupExec(c, "DROP TABLE "+quoteIdent(filler)); err != nil {
-					return err
+					return fmt.Errorf("sqlite: drop root filler %s before %s %s: %w", filler, object.Type, object.Name, err)
 				}
 				delete(fillers, object.RootPage)
 			}
 		}
 		if err := logicalBackupExec(c, object.SQL); err != nil {
-			return err
+			return fmt.Errorf("sqlite: replay %s %s: %w", object.Type, object.Name, err)
 		}
 		if preserveRootPages && object.RootPage > 0 {
 			if err := logicalCheckObjectRootPage(c, object.Name, object.RootPage); err != nil {
-				return err
+				return fmt.Errorf("sqlite: replay %s %s rootpage: %w", object.Type, object.Name, err)
 			}
 		}
 	}
@@ -397,7 +401,7 @@ func logicalDropRootFillers(c *conn, fillers map[int64]string) error {
 	}
 	for _, root := range roots {
 		if err := logicalBackupExec(c, "DROP TABLE "+quoteIdent(fillers[root])); err != nil {
-			return err
+			return fmt.Errorf("sqlite: drop root filler %s: %w", fillers[root], err)
 		}
 		delete(fillers, root)
 	}

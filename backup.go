@@ -62,8 +62,12 @@ func (b *Backup) Step(n int32) (bool, error) {
 // object is invalid and may not be used following a call to Finish.
 func (b *Backup) Finish() error {
 	if b.logical != nil {
-		b.dstConn.Close()
-		return b.logical.release()
+		err := b.logical.release()
+		closeErr := b.dstConn.Close()
+		if err != nil {
+			return err
+		}
+		return closeErr
 	}
 	rc := sqlite3.Xsqlite3_backup_finish(b.srcConn.tls, b.pBackup)
 	b.dstConn.Close()
@@ -134,14 +138,14 @@ func (b *Backup) Commit() (driver.Conn, error) {
 
 func newLogicalBackup(src *conn, dst *conn) (*logicalBackup, error) {
 	if err := logicalBackupCheckDestination(dst); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("sqlite: logical backup check destination: %w", err)
 	}
 	pageCount, err := logicalBackupPageCount(src)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("sqlite: logical backup page count: %w", err)
 	}
 	if rc := sqlite3.StorageEngineBeginLogicalBackup(src.tls, src.db); rc != sqlite3.SQLITE_OK {
-		return nil, errstrForDB(src.tls, rc, src.db)
+		return nil, fmt.Errorf("sqlite: logical backup begin source: %w", errstrForDB(src.tls, rc, src.db))
 	}
 	return &logicalBackup{src: src, dst: dst, pageCount: pageCount, remaining: pageCount}, nil
 }
@@ -243,19 +247,19 @@ func logicalBackupPageCount(src *conn) (int, error) {
 
 func logicalBackupCopy(src *conn, dst *conn) (err error) {
 	if err := logicalBackupExec(dst, "PRAGMA foreign_keys=OFF"); err != nil {
-		return err
+		return fmt.Errorf("sqlite: logical backup disable foreign_keys: %w", err)
 	}
 	if err := logicalBackupClearDestination(dst); err != nil {
-		return err
+		return fmt.Errorf("sqlite: logical backup clear destination: %w", err)
 	}
 	if err := logicalBackupCreateSchema(src, dst); err != nil {
-		return err
+		return fmt.Errorf("sqlite: logical backup create schema: %w", err)
 	}
 	if err := logicalBackupEnsureTables(src, dst); err != nil {
-		return err
+		return fmt.Errorf("sqlite: logical backup ensure tables: %w", err)
 	}
 	if err := logicalBackupCopyRows(src, dst); err != nil {
-		return err
+		return fmt.Errorf("sqlite: logical backup copy rows: %w", err)
 	}
 	return nil
 }
@@ -306,35 +310,15 @@ func logicalBackupClearDestination(dst *conn) error {
 }
 
 func logicalBackupCreateSchema(src *conn, dst *conn) error {
-	rows, err := logicalBackupQuery(src, `
-		SELECT sql
-		FROM sqlite_schema
-		WHERE sql IS NOT NULL
-		  AND name NOT LIKE 'sqlite_%'
-		  AND type IN ('table', 'index', 'trigger', 'view')
-		ORDER BY CASE type
-			WHEN 'table' THEN 0
-			WHEN 'index' THEN 1
-			WHEN 'trigger' THEN 2
-			WHEN 'view' THEN 3
-			ELSE 4
-		END,
-		CASE WHEN rootpage > 0 THEN 0 ELSE 1 END,
-		CASE WHEN rootpage > 0 THEN rootpage ELSE rowid END,
-		rowid`)
+	schema, err := logicalSchemaObjects(src)
 	if err != nil {
 		return err
 	}
-	for _, row := range rows {
-		sql, ok := row[0].(string)
-		if !ok {
-			return fmt.Errorf("sqlite: backup schema SQL is %T", row[0])
-		}
-		if err := logicalBackupExec(dst, sql); err != nil {
-			return err
-		}
+	fillers, err := logicalDeserializeTables(dst, schema)
+	if err != nil {
+		return err
 	}
-	return nil
+	return logicalDeserializeNonTables(dst, schema, fillers)
 }
 
 func logicalBackupCopyRows(src *conn, dst *conn) error {

@@ -51,6 +51,8 @@ Last updated: 2026-06-04.
 - Matched ordinary `DROP TABLE` root reuse: minweight now records freed logical root pages and lets subsequent `BtreeCreateTable` reuse them, keeping `sqlite_schema.rootpage` stable like native btree without modeling the physical freelist pages.
 - Matched logical serialize/backup schema replay order for reused table roots by sorting root-bearing schema objects by `rootpage` within each object kind, so table-level root reuse survives minweight logical round-trips.
 - Matched logical `Serialize`/`Deserialize` replay for the concrete shape where an index rootpage is lower than its owning table rootpage. The logical payload now records `tbl_name` and `rootpage`; replay uses temporary filler tables to reserve lower roots, then frees the matching filler immediately before creating the lower-root index.
+- Matched logical `Backup`/`Restore` schema replay with the same rootpage-aware path used by `Serialize`/`Deserialize`, including the tested lower-root index shape.
+- Fixed logical restore `Finish`: the backup state is now released before closing the remote source connection, so `FinishLogicalBackup` still sees the source handle.
 
 ## Focused Test Policy
 
@@ -96,5 +98,4 @@ These tests are intentionally skipped only when `SQLITE_TEST_STORAGE_ENGINE=minw
 ## TODO
 
 - Decide whether physical page features remain explicitly unsupported or get a page-file compatibility layer: `sqlite_dbpage`, VFS-backed DB files, valid WAL frame contents, and chmod-only read-only detection are in this bucket. The current minweight integrity check is logical only and does not validate SQLite page images.
-- Apply the same lower-root filler replay to logical `Backup`/`Restore`. `Serialize`/`Deserialize` now preserves the tested lower-root index shape, but `Backup` still uses its older table-before-index schema replay path.
 - Preserve logical freelist order across serialize/backup if future tests require root reuse after a restore. The current payload preserves visible schema rootpages, not the exact hidden freelist sequence.
