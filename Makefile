@@ -2,7 +2,7 @@
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 
-.PHONY:	all build_all_targets clean edit editor test vendor work
+.PHONY:	all build_all_targets clean edit editor test test_storage_engine vendor work
 
 all: editor
 	golint 2>&1
@@ -65,6 +65,9 @@ editor:
 
 test:
 	go test -v -timeout 24h
+
+test_storage_engine:
+	sh test-storage-engine.sh
 	
 vendor:
 	cd vendor_libs && go build -o ../vendor main.go

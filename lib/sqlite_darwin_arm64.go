@@ -47118,7 +47118,7 @@ func _unlockBtreeMutex(tls *libc.TLS, p uintptr) {
 //	** for the lock to become available on p, then relock all of the
 //	** subsequent Btrees that desire a lock.
 //	*/
-func _sqlite3BtreeEnter(tls *libc.TLS, p uintptr) {
+func _nativeSqlite3BtreeEnter(tls *libc.TLS, p uintptr) {
 	/* Some basic sanity checking on the Btree.  The list of Btrees
 	 ** connected by pNext and pPrev should be in sorted order by
 	 ** Btree.pBt value. All elements of the list should belong to
@@ -47196,7 +47196,7 @@ func _btreeLockCarefully(tls *libc.TLS, p uintptr) {
 //	/*
 //	** Exit the recursive mutex on a Btree.
 //	*/
-func _sqlite3BtreeLeave(tls *libc.TLS, p uintptr) {
+func _nativeSqlite3BtreeLeave(tls *libc.TLS, p uintptr) {
 	if (*TBtree)(unsafe.Pointer(p)).Fsharable != 0 {
 		(*TBtree)(unsafe.Pointer(p)).FwantToLock = (*TBtree)(unsafe.Pointer(p)).FwantToLock - 1
 		if (*TBtree)(unsafe.Pointer(p)).FwantToLock == 0 {
@@ -47245,7 +47245,7 @@ func _btreeEnterAll(tls *libc.TLS, db uintptr) {
 	(*Tsqlite3)(unsafe.Pointer(db)).FnoSharedCache = skipOk
 }
 
-func _sqlite3BtreeEnterAll(tls *libc.TLS, db uintptr) {
+func _nativeSqlite3BtreeEnterAll(tls *libc.TLS, db uintptr) {
 	if libc.Int32FromUint8((*Tsqlite3)(unsafe.Pointer(db)).FnoSharedCache) == 0 {
 		_btreeEnterAll(tls, db)
 	}
@@ -47271,7 +47271,7 @@ func _btreeLeaveAll(tls *libc.TLS, db uintptr) {
 	}
 }
 
-func _sqlite3BtreeLeaveAll(tls *libc.TLS, db uintptr) {
+func _nativeSqlite3BtreeLeaveAll(tls *libc.TLS, db uintptr) {
 	if libc.Int32FromUint8((*Tsqlite3)(unsafe.Pointer(db)).FnoSharedCache) == 0 {
 		_btreeLeaveAll(tls, db)
 	}
@@ -47286,11 +47286,11 @@ func _sqlite3BtreeLeaveAll(tls *libc.TLS, db uintptr) {
 //	** any time OMIT_SHARED_CACHE is not defined, regardless of whether or not
 //	** the build is threadsafe. Leave() is only required by threadsafe builds.
 //	*/
-func _sqlite3BtreeEnterCursor(tls *libc.TLS, pCur uintptr) {
+func _nativeSqlite3BtreeEnterCursor(tls *libc.TLS, pCur uintptr) {
 	_sqlite3BtreeEnter(tls, (*TBtCursor)(unsafe.Pointer(pCur)).FpBtree)
 }
 
-func _sqlite3BtreeLeaveCursor(tls *libc.TLS, pCur uintptr) {
+func _nativeSqlite3BtreeLeaveCursor(tls *libc.TLS, pCur uintptr) {
 	_sqlite3BtreeLeave(tls, (*TBtCursor)(unsafe.Pointer(pCur)).FpBtree)
 }
 
@@ -47917,7 +47917,7 @@ func _saveCursorsOnList(tls *libc.TLS, p uintptr, iRoot TPgno, pExcept uintptr) 
 //	/*
 //	** Clear the current cursor position.
 //	*/
-func _sqlite3BtreeClearCursor(tls *libc.TLS, pCur uintptr) {
+func _nativeSqlite3BtreeClearCursor(tls *libc.TLS, pCur uintptr) {
 	Xsqlite3_free(tls, (*TBtCursor)(unsafe.Pointer(pCur)).FpKey)
 	(*TBtCursor)(unsafe.Pointer(pCur)).FpKey = uintptr(0)
 	(*TBtCursor)(unsafe.Pointer(pCur)).FeState = uint8(CURSOR_INVALID)
@@ -48006,7 +48006,7 @@ func _btreeRestoreCursorPosition(tls *libc.TLS, pCur uintptr) (r int32) {
 //	** Use the separate sqlite3BtreeCursorRestore() routine to restore a cursor
 //	** back to where it ought to be if this routine returns true.
 //	*/
-func _sqlite3BtreeCursorHasMoved(tls *libc.TLS, pCur uintptr) (r int32) {
+func _nativeSqlite3BtreeCursorHasMoved(tls *libc.TLS, pCur uintptr) (r int32) {
 	return libc.BoolInt32(CURSOR_VALID != libc.Int32FromUint8(*(*Tu8)(unsafe.Pointer(pCur))))
 }
 
@@ -48017,7 +48017,7 @@ func _sqlite3BtreeCursorHasMoved(tls *libc.TLS, pCur uintptr) (r int32) {
 //	** false to the sqlite3BtreeCursorHasMoved() routine above.  The fake
 //	** cursor returned must not be used with any other Btree interface.
 //	*/
-func _sqlite3BtreeFakeValidCursor(tls *libc.TLS) (r uintptr) {
+func _nativeSqlite3BtreeFakeValidCursor(tls *libc.TLS) (r uintptr) {
 	return uintptr(unsafe.Pointer(&_fakeCursor))
 }
 
@@ -48038,7 +48038,7 @@ var _fakeCursor Tu8
 //	** This routine should only be called for a cursor that just returned
 //	** TRUE from sqlite3BtreeCursorHasMoved().
 //	*/
-func _sqlite3BtreeCursorRestore(tls *libc.TLS, pCur uintptr, pDifferentRow uintptr) (r int32) {
+func _nativeSqlite3BtreeCursorRestore(tls *libc.TLS, pCur uintptr, pDifferentRow uintptr) (r int32) {
 	var rc, v1 int32
 	_, _ = rc, v1
 	if libc.Int32FromUint8((*TBtCursor)(unsafe.Pointer(pCur)).FeState) >= int32(CURSOR_REQUIRESEEK) {
@@ -48064,7 +48064,7 @@ func _sqlite3BtreeCursorRestore(tls *libc.TLS, pCur uintptr, pDifferentRow uintp
 //	/*
 //	** Provide flag hints to the cursor.
 //	*/
-func _sqlite3BtreeCursorHintFlags(tls *libc.TLS, pCur uintptr, x uint32) {
+func _nativeSqlite3BtreeCursorHintFlags(tls *libc.TLS, pCur uintptr, x uint32) {
 	(*TBtCursor)(unsafe.Pointer(pCur)).Fhints = uint8(x)
 }
 
@@ -49401,7 +49401,7 @@ func _btreePagecount(tls *libc.TLS, pBt uintptr) (r TPgno) {
 	return (*TBtShared)(unsafe.Pointer(pBt)).FnPage
 }
 
-func _sqlite3BtreeLastPage(tls *libc.TLS, p uintptr) (r TPgno) {
+func _nativeSqlite3BtreeLastPage(tls *libc.TLS, p uintptr) (r TPgno) {
 	return _btreePagecount(tls, (*TBtree)(unsafe.Pointer(p)).FpBt)
 }
 
@@ -49553,7 +49553,7 @@ func _btreeInvokeBusyHandler(tls *libc.TLS, pArg uintptr) (r int32) {
 //	** objects in the same database connection since doing so will lead
 //	** to problems with locking.
 //	*/
-func _sqlite3BtreeOpen(tls *libc.TLS, pVfs uintptr, zFilename uintptr, db uintptr, ppBtree uintptr, flags int32, vfsFlags int32) (r int32) {
+func _nativeSqlite3BtreeOpen(tls *libc.TLS, pVfs uintptr, zFilename uintptr, db uintptr, ppBtree uintptr, flags int32, vfsFlags int32) (r int32) {
 	bp := tls.Alloc(112)
 	defer tls.Free(112)
 	var i, iDb, isMemdb, isTempDb, nFilename, nFullPathname, rc, v1 int32
@@ -49916,7 +49916,7 @@ func _freeTempSpace(tls *libc.TLS, pBt uintptr) {
 //	/*
 //	** Close an open database and invalidate all cursors.
 //	*/
-func _sqlite3BtreeClose(tls *libc.TLS, p uintptr) (r int32) {
+func _nativeSqlite3BtreeClose(tls *libc.TLS, p uintptr) (r int32) {
 	var pBt uintptr
 	_ = pBt
 	pBt = (*TBtree)(unsafe.Pointer(p)).FpBt
@@ -49966,7 +49966,7 @@ func _sqlite3BtreeClose(tls *libc.TLS, p uintptr) (r int32) {
 //	** cache is allowed to grow larger than this limit if it contains
 //	** dirty pages or pages still in active use.
 //	*/
-func _sqlite3BtreeSetCacheSize(tls *libc.TLS, p uintptr, mxPage int32) (r int32) {
+func _nativeSqlite3BtreeSetCacheSize(tls *libc.TLS, p uintptr, mxPage int32) (r int32) {
 	var pBt uintptr
 	_ = pBt
 	pBt = (*TBtree)(unsafe.Pointer(p)).FpBt
@@ -49988,7 +49988,7 @@ func _sqlite3BtreeSetCacheSize(tls *libc.TLS, p uintptr, mxPage int32) (r int32)
 //	** as an argument, no changes are made to the spill size setting, so
 //	** using mxPage of 0 is a way to query the current spill size.
 //	*/
-func _sqlite3BtreeSetSpillSize(tls *libc.TLS, p uintptr, mxPage int32) (r int32) {
+func _nativeSqlite3BtreeSetSpillSize(tls *libc.TLS, p uintptr, mxPage int32) (r int32) {
 	var pBt uintptr
 	var res int32
 	_, _ = pBt, res
@@ -50005,7 +50005,7 @@ func _sqlite3BtreeSetSpillSize(tls *libc.TLS, p uintptr, mxPage int32) (r int32)
 //	** Change the limit on the amount of the database file that may be
 //	** memory mapped.
 //	*/
-func _sqlite3BtreeSetMmapLimit(tls *libc.TLS, p uintptr, szMmap Tsqlite3_int64) (r int32) {
+func _nativeSqlite3BtreeSetMmapLimit(tls *libc.TLS, p uintptr, szMmap Tsqlite3_int64) (r int32) {
 	var pBt uintptr
 	_ = pBt
 	pBt = (*TBtree)(unsafe.Pointer(p)).FpBt
@@ -50025,7 +50025,7 @@ func _sqlite3BtreeSetMmapLimit(tls *libc.TLS, p uintptr, szMmap Tsqlite3_int64) 
 //	** is a very low but non-zero probability of damage.  Level 3 reduces the
 //	** probability of damage to near zero but with a write performance reduction.
 //	*/
-func _sqlite3BtreeSetPagerFlags(tls *libc.TLS, p uintptr, pgFlags uint32) (r int32) {
+func _nativeSqlite3BtreeSetPagerFlags(tls *libc.TLS, p uintptr, pgFlags uint32) (r int32) {
 	var pBt uintptr
 	_ = pBt
 	pBt = (*TBtree)(unsafe.Pointer(p)).FpBt
@@ -50057,7 +50057,7 @@ func _sqlite3BtreeSetPagerFlags(tls *libc.TLS, p uintptr, pgFlags uint32) (r int
 //	** If the iFix!=0 then the BTS_PAGESIZE_FIXED flag is set so that the page size
 //	** and autovacuum mode can no longer be changed.
 //	*/
-func _sqlite3BtreeSetPageSize(tls *libc.TLS, p uintptr, pageSize int32, nReserve int32, iFix int32) (r int32) {
+func _nativeSqlite3BtreeSetPageSize(tls *libc.TLS, p uintptr, pageSize int32, nReserve int32, iFix int32) (r int32) {
 	var pBt, v1 uintptr
 	var rc, x int32
 	_, _, _, _ = pBt, rc, x, v1
@@ -50099,7 +50099,7 @@ func _sqlite3BtreeSetPageSize(tls *libc.TLS, p uintptr, pageSize int32, nReserve
 //	/*
 //	** Return the currently defined page size
 //	*/
-func _sqlite3BtreeGetPageSize(tls *libc.TLS, p uintptr) (r int32) {
+func _nativeSqlite3BtreeGetPageSize(tls *libc.TLS, p uintptr) (r int32) {
 	return libc.Int32FromUint32((*TBtShared)(unsafe.Pointer((*TBtree)(unsafe.Pointer(p)).FpBt)).FpageSize)
 }
 
@@ -50116,7 +50116,7 @@ func _sqlite3BtreeGetPageSize(tls *libc.TLS, p uintptr) (r int32) {
 //	** were to be called, it might collide with some other operation on the
 //	** database handle that owns *p, causing undefined behavior.
 //	*/
-func _sqlite3BtreeGetReserveNoMutex(tls *libc.TLS, p uintptr) (r int32) {
+func _nativeSqlite3BtreeGetReserveNoMutex(tls *libc.TLS, p uintptr) (r int32) {
 	var n int32
 	_ = n
 	n = libc.Int32FromUint32((*TBtShared)(unsafe.Pointer((*TBtree)(unsafe.Pointer(p)).FpBt)).FpageSize - (*TBtShared)(unsafe.Pointer((*TBtree)(unsafe.Pointer(p)).FpBt)).FusableSize)
@@ -50134,7 +50134,7 @@ func _sqlite3BtreeGetReserveNoMutex(tls *libc.TLS, p uintptr) (r int32) {
 //	** the latest reserve size requested by SQLITE_FILECTRL_RESERVE_BYTES.
 //	** The amount of reserve can only grow - never shrink.
 //	*/
-func _sqlite3BtreeGetRequestedReserve(tls *libc.TLS, p uintptr) (r int32) {
+func _nativeSqlite3BtreeGetRequestedReserve(tls *libc.TLS, p uintptr) (r int32) {
 	var n1, n2, v1 int32
 	_, _, _ = n1, n2, v1
 	_sqlite3BtreeEnter(tls, p)
@@ -50156,7 +50156,7 @@ func _sqlite3BtreeGetRequestedReserve(tls *libc.TLS, p uintptr) (r int32) {
 //	** No changes are made if mxPage is 0 or negative.
 //	** Regardless of the value of mxPage, return the maximum page count.
 //	*/
-func _sqlite3BtreeMaxPageCount(tls *libc.TLS, p uintptr, mxPage TPgno) (r TPgno) {
+func _nativeSqlite3BtreeMaxPageCount(tls *libc.TLS, p uintptr, mxPage TPgno) (r TPgno) {
 	var n TPgno
 	_ = n
 	_sqlite3BtreeEnter(tls, p)
@@ -50185,7 +50185,7 @@ func _sqlite3BtreeMaxPageCount(tls *libc.TLS, p uintptr, mxPage TPgno) (r TPgno)
 //	** that freelist leaf pages are written back into the database, increasing
 //	** the amount of disk I/O.
 //	*/
-func _sqlite3BtreeSecureDelete(tls *libc.TLS, p uintptr, newFlag int32) (r int32) {
+func _nativeSqlite3BtreeSecureDelete(tls *libc.TLS, p uintptr, newFlag int32) (r int32) {
 	var b int32
 	var v1 uintptr
 	_, _ = b, v1
@@ -50212,7 +50212,7 @@ func _sqlite3BtreeSecureDelete(tls *libc.TLS, p uintptr, newFlag int32) (r int32
 //	** is disabled. The default value for the auto-vacuum property is
 //	** determined by the SQLITE_DEFAULT_AUTOVACUUM macro.
 //	*/
-func _sqlite3BtreeSetAutoVacuum(tls *libc.TLS, p uintptr, autoVacuum int32) (r int32) {
+func _nativeSqlite3BtreeSetAutoVacuum(tls *libc.TLS, p uintptr, autoVacuum int32) (r int32) {
 	var av Tu8
 	var pBt uintptr
 	var rc, v1 int32
@@ -50255,7 +50255,7 @@ func _sqlite3BtreeSetAutoVacuum(tls *libc.TLS, p uintptr, autoVacuum int32) (r i
 //	** Return the value of the 'auto-vacuum' property. If auto-vacuum is
 //	** enabled 1 is returned. Otherwise 0.
 //	*/
-func _sqlite3BtreeGetAutoVacuum(tls *libc.TLS, p uintptr) (r int32) {
+func _nativeSqlite3BtreeGetAutoVacuum(tls *libc.TLS, p uintptr) (r int32) {
 	var rc, v1, v2 int32
 	_, _, _ = rc, v1, v2
 	_sqlite3BtreeEnter(tls, p)
@@ -50526,7 +50526,7 @@ func _newDatabase(tls *libc.TLS, pBt uintptr) (r int32) {
 //	** consisting of a single page and no schema objects). Return SQLITE_OK
 //	** if successful, or an SQLite error code otherwise.
 //	*/
-func _sqlite3BtreeNewDb(tls *libc.TLS, p uintptr) (r int32) {
+func _nativeSqlite3BtreeNewDb(tls *libc.TLS, p uintptr) (r int32) {
 	var rc int32
 	_ = rc
 	_sqlite3BtreeEnter(tls, p)
@@ -50740,7 +50740,7 @@ trans_begun:
 	return rc
 }
 
-func _sqlite3BtreeBeginTrans(tls *libc.TLS, p uintptr, wrflag int32, pSchemaVersion uintptr) (r int32) {
+func _nativeSqlite3BtreeBeginTrans(tls *libc.TLS, p uintptr, wrflag int32, pSchemaVersion uintptr) (r int32) {
 	var pBt uintptr
 	_ = pBt
 	if (*TBtree)(unsafe.Pointer(p)).Fsharable != 0 || libc.Int32FromUint8((*TBtree)(unsafe.Pointer(p)).FinTrans) == TRANS_NONE || libc.Int32FromUint8((*TBtree)(unsafe.Pointer(p)).FinTrans) == int32(TRANS_READ) && wrflag != 0 {
@@ -51102,7 +51102,7 @@ func _finalDbSize(tls *libc.TLS, pBt uintptr, nOrig TPgno, nFree TPgno) (r TPgno
 //	** SQLITE_DONE is returned. If it is not finished, but no error occurred,
 //	** SQLITE_OK is returned. Otherwise an SQLite error code.
 //	*/
-func _sqlite3BtreeIncrVacuum(tls *libc.TLS, p uintptr) (r int32) {
+func _nativeSqlite3BtreeIncrVacuum(tls *libc.TLS, p uintptr) (r int32) {
 	var nFin, nFree, nOrig TPgno
 	var pBt uintptr
 	var rc int32
@@ -51250,7 +51250,7 @@ func _autoVacuumCommit(tls *libc.TLS, p uintptr) (r int32) {
 //	** Once this is routine has returned, the only thing required to commit
 //	** the write-transaction for this database file is to delete the journal.
 //	*/
-func _sqlite3BtreeCommitPhaseOne(tls *libc.TLS, p uintptr, zSuperJrnl uintptr) (r int32) {
+func _nativeSqlite3BtreeCommitPhaseOne(tls *libc.TLS, p uintptr, zSuperJrnl uintptr) (r int32) {
 	var pBt uintptr
 	var rc int32
 	_, _ = pBt, rc
@@ -51339,7 +51339,7 @@ func _btreeEndTransaction(tls *libc.TLS, p uintptr) {
 //	** This will release the write lock on the database file.  If there
 //	** are no active cursors, it also releases the read lock.
 //	*/
-func _sqlite3BtreeCommitPhaseTwo(tls *libc.TLS, p uintptr, bCleanup int32) (r int32) {
+func _nativeSqlite3BtreeCommitPhaseTwo(tls *libc.TLS, p uintptr, bCleanup int32) (r int32) {
 	var pBt uintptr
 	var rc int32
 	_, _ = pBt, rc
@@ -51371,7 +51371,7 @@ func _sqlite3BtreeCommitPhaseTwo(tls *libc.TLS, p uintptr, bCleanup int32) (r in
 //	/*
 //	** Do both phases of a commit.
 //	*/
-func _sqlite3BtreeCommit(tls *libc.TLS, p uintptr) (r int32) {
+func _nativeSqlite3BtreeCommit(tls *libc.TLS, p uintptr) (r int32) {
 	var rc int32
 	_ = rc
 	_sqlite3BtreeEnter(tls, p)
@@ -51411,7 +51411,7 @@ func _sqlite3BtreeCommit(tls *libc.TLS, p uintptr) (r int32) {
 //	** SQLITE_OK is returned if successful, or if an error occurs while
 //	** saving a cursor position, an SQLite error code.
 //	*/
-func _sqlite3BtreeTripAllCursors(tls *libc.TLS, pBtree uintptr, errCode int32, writeOnly int32) (r int32) {
+func _nativeSqlite3BtreeTripAllCursors(tls *libc.TLS, pBtree uintptr, errCode int32, writeOnly int32) (r int32) {
 	var p uintptr
 	var rc int32
 	_, _ = p, rc
@@ -51477,7 +51477,7 @@ func _btreeSetNPage(tls *libc.TLS, pBt uintptr, pPage1 uintptr) {
 //	** This will release the write lock on the database file.  If there
 //	** are no active cursors, it also releases the read lock.
 //	*/
-func _sqlite3BtreeRollback(tls *libc.TLS, p uintptr, tripCode int32, writeOnly int32) (r int32) {
+func _nativeSqlite3BtreeRollback(tls *libc.TLS, p uintptr, tripCode int32, writeOnly int32) (r int32) {
 	bp := tls.Alloc(16)
 	defer tls.Free(16)
 	var pBt uintptr
@@ -51542,7 +51542,7 @@ func _sqlite3BtreeRollback(tls *libc.TLS, p uintptr, tripCode int32, writeOnly i
 //	** iStatement is 1. This anonymous savepoint can be released or rolled back
 //	** using the sqlite3BtreeSavepoint() function.
 //	*/
-func _sqlite3BtreeBeginStmt(tls *libc.TLS, p uintptr, iStatement int32) (r int32) {
+func _nativeSqlite3BtreeBeginStmt(tls *libc.TLS, p uintptr, iStatement int32) (r int32) {
 	var pBt uintptr
 	var rc int32
 	_, _ = pBt, rc
@@ -51572,7 +51572,7 @@ func _sqlite3BtreeBeginStmt(tls *libc.TLS, p uintptr, iStatement int32) (r int32
 //	** from a normal transaction rollback, as no locks are released and the
 //	** transaction remains open.
 //	*/
-func _sqlite3BtreeSavepoint(tls *libc.TLS, p uintptr, op int32, iSavepoint int32) (r int32) {
+func _nativeSqlite3BtreeSavepoint(tls *libc.TLS, p uintptr, op int32, iSavepoint int32) (r int32) {
 	var pBt uintptr
 	var rc int32
 	_, _ = pBt, rc
@@ -51712,7 +51712,7 @@ func _btreeCursorWithLock(tls *libc.TLS, p uintptr, iTable TPgno, wrFlag int32, 
 	return rc
 }
 
-func _sqlite3BtreeCursor(tls *libc.TLS, p uintptr, iTable TPgno, wrFlag int32, pKeyInfo uintptr, pCur uintptr) (r int32) {
+func _nativeSqlite3BtreeCursor(tls *libc.TLS, p uintptr, iTable TPgno, wrFlag int32, pKeyInfo uintptr, pCur uintptr) (r int32) {
 	if (*TBtree)(unsafe.Pointer(p)).Fsharable != 0 {
 		return _btreeCursorWithLock(tls, p, iTable, wrFlag, pKeyInfo, pCur)
 	} else {
@@ -51731,7 +51731,7 @@ func _sqlite3BtreeCursor(tls *libc.TLS, p uintptr, iTable TPgno, wrFlag int32, p
 //	** to users so they cannot do the sizeof() themselves - they must call
 //	** this routine.
 //	*/
-func _sqlite3BtreeCursorSize(tls *libc.TLS) (r int32) {
+func _nativeSqlite3BtreeCursorSize(tls *libc.TLS) (r int32) {
 	return libc.Int32FromUint64((libc.Uint64FromInt64(296) + libc.Uint64FromInt32(7)) & libc.Uint64FromInt32(^libc.Int32FromInt32(7)))
 }
 
@@ -51745,7 +51745,7 @@ func _sqlite3BtreeCursorSize(tls *libc.TLS) (r int32) {
 //	** do not need to be zeroed and they are large, so we can save a lot
 //	** of run-time by skipping the initialization of those elements.
 //	*/
-func _sqlite3BtreeCursorZero(tls *libc.TLS, p uintptr) {
+func _nativeSqlite3BtreeCursorZero(tls *libc.TLS, p uintptr) {
 	libc.X__builtin___memset_chk(tls, p, 0, uint64(libc.UintptrFromInt32(0)+32), ^t__predefined_size_t(0))
 }
 
@@ -51755,7 +51755,7 @@ func _sqlite3BtreeCursorZero(tls *libc.TLS, p uintptr) {
 //	** Close a cursor.  The read lock on the database file is released
 //	** when the last cursor is closed.
 //	*/
-func _sqlite3BtreeCloseCursor(tls *libc.TLS, pCur uintptr) (r int32) {
+func _nativeSqlite3BtreeCloseCursor(tls *libc.TLS, pCur uintptr) (r int32) {
 	var pBt, pBtree, pPrev uintptr
 	_, _, _ = pBt, pBtree, pPrev
 	pBtree = (*TBtCursor)(unsafe.Pointer(pCur)).FpBtree
@@ -51811,7 +51811,7 @@ func _getCellInfo(tls *libc.TLS, pCur uintptr) {
 	}
 }
 
-func _sqlite3BtreeCursorIsValidNN(tls *libc.TLS, pCur uintptr) (r int32) {
+func _nativeSqlite3BtreeCursorIsValidNN(tls *libc.TLS, pCur uintptr) (r int32) {
 	return libc.BoolInt32(libc.Int32FromUint8((*TBtCursor)(unsafe.Pointer(pCur)).FeState) == CURSOR_VALID)
 }
 
@@ -51823,7 +51823,7 @@ func _sqlite3BtreeCursorIsValidNN(tls *libc.TLS, pCur uintptr) (r int32) {
 //	** ordinary table btree.  If the cursor points to an index btree or
 //	** is invalid, the result of this routine is undefined.
 //	*/
-func _sqlite3BtreeIntegerKey(tls *libc.TLS, pCur uintptr) (r Ti64) {
+func _nativeSqlite3BtreeIntegerKey(tls *libc.TLS, pCur uintptr) (r Ti64) {
 	_getCellInfo(tls, pCur)
 	return (*TBtCursor)(unsafe.Pointer(pCur)).Finfo.FnKey
 }
@@ -51833,14 +51833,14 @@ func _sqlite3BtreeIntegerKey(tls *libc.TLS, pCur uintptr) (r Ti64) {
 //	/*
 //	** Pin or unpin a cursor.
 //	*/
-func _sqlite3BtreeCursorPin(tls *libc.TLS, pCur uintptr) {
+func _nativeSqlite3BtreeCursorPin(tls *libc.TLS, pCur uintptr) {
 	var v1 uintptr
 	_ = v1
 	v1 = pCur + 1
 	*(*Tu8)(unsafe.Pointer(v1)) = Tu8(int32(*(*Tu8)(unsafe.Pointer(v1))) | libc.Int32FromInt32(BTCF_Pinned))
 }
 
-func _sqlite3BtreeCursorUnpin(tls *libc.TLS, pCur uintptr) {
+func _nativeSqlite3BtreeCursorUnpin(tls *libc.TLS, pCur uintptr) {
 	var v1 uintptr
 	_ = v1
 	v1 = pCur + 1
@@ -51853,7 +51853,7 @@ func _sqlite3BtreeCursorUnpin(tls *libc.TLS, pCur uintptr) {
 //	** Return the offset into the database file for the start of the
 //	** payload to which the cursor is pointing.
 //	*/
-func _sqlite3BtreeOffset(tls *libc.TLS, pCur uintptr) (r Ti64) {
+func _nativeSqlite3BtreeOffset(tls *libc.TLS, pCur uintptr) (r Ti64) {
 	_getCellInfo(tls, pCur)
 	return libc.Int64FromUint32((*TBtShared)(unsafe.Pointer((*TBtCursor)(unsafe.Pointer(pCur)).FpBt)).FpageSize)*(libc.Int64FromUint32((*TMemPage)(unsafe.Pointer((*TBtCursor)(unsafe.Pointer(pCur)).FpPage)).Fpgno)-int64(1)) + (int64((*TBtCursor)(unsafe.Pointer(pCur)).Finfo.FpPayload) - int64((*TMemPage)(unsafe.Pointer((*TBtCursor)(unsafe.Pointer(pCur)).FpPage)).FaData))
 }
@@ -51869,7 +51869,7 @@ func _sqlite3BtreeOffset(tls *libc.TLS, pCur uintptr) (r Ti64) {
 //	** valid entry.  In other words, the calling procedure must guarantee
 //	** that the cursor has Cursor.eState==CURSOR_VALID.
 //	*/
-func _sqlite3BtreePayloadSize(tls *libc.TLS, pCur uintptr) (r Tu32) {
+func _nativeSqlite3BtreePayloadSize(tls *libc.TLS, pCur uintptr) (r Tu32) {
 	_getCellInfo(tls, pCur)
 	return (*TBtCursor)(unsafe.Pointer(pCur)).Finfo.FnPayload
 }
@@ -51889,7 +51889,7 @@ func _sqlite3BtreePayloadSize(tls *libc.TLS, pCur uintptr) (r Tu32) {
 //	** The current implementation merely returns the size of the underlying
 //	** database file.
 //	*/
-func _sqlite3BtreeMaxRecordSize(tls *libc.TLS, pCur uintptr) (r Tsqlite3_int64) {
+func _nativeSqlite3BtreeMaxRecordSize(tls *libc.TLS, pCur uintptr) (r Tsqlite3_int64) {
 	return libc.Int64FromUint32((*TBtShared)(unsafe.Pointer((*TBtCursor)(unsafe.Pointer(pCur)).FpBt)).FpageSize) * libc.Int64FromUint32((*TBtShared)(unsafe.Pointer((*TBtCursor)(unsafe.Pointer(pCur)).FpBt)).FnPage)
 }
 
@@ -52212,7 +52212,7 @@ func _accessPayload(tls *libc.TLS, pCur uintptr, offset Tu32, amt Tu32, pBuf uin
 //	** wrong.  An error is returned if "offset+amt" is larger than
 //	** the available payload.
 //	*/
-func _sqlite3BtreePayload(tls *libc.TLS, pCur uintptr, offset Tu32, amt Tu32, pBuf uintptr) (r int32) {
+func _nativeSqlite3BtreePayload(tls *libc.TLS, pCur uintptr, offset Tu32, amt Tu32, pBuf uintptr) (r int32) {
 	return _accessPayload(tls, pCur, offset, amt, pBuf, 0)
 }
 
@@ -52238,7 +52238,7 @@ func _accessPayloadChecked(tls *libc.TLS, pCur uintptr, offset Tu32, amt Tu32, p
 	return v1
 }
 
-func _sqlite3BtreePayloadChecked(tls *libc.TLS, pCur uintptr, offset Tu32, amt Tu32, pBuf uintptr) (r int32) {
+func _nativeSqlite3BtreePayloadChecked(tls *libc.TLS, pCur uintptr, offset Tu32, amt Tu32, pBuf uintptr) (r int32) {
 	if libc.Int32FromUint8((*TBtCursor)(unsafe.Pointer(pCur)).FeState) == CURSOR_VALID {
 		return _accessPayload(tls, pCur, offset, amt, pBuf, 0)
 	} else {
@@ -52302,7 +52302,7 @@ func _fetchPayload(tls *libc.TLS, pCur uintptr, pAmt uintptr) (r uintptr) {
 //	** These routines is used to get quick access to key and data
 //	** in the common case where no overflow pages are used.
 //	*/
-func _sqlite3BtreePayloadFetch(tls *libc.TLS, pCur uintptr, pAmt uintptr) (r uintptr) {
+func _nativeSqlite3BtreePayloadFetch(tls *libc.TLS, pCur uintptr, pAmt uintptr) (r uintptr) {
 	return _fetchPayload(tls, pCur, pAmt)
 }
 
@@ -52550,7 +52550,7 @@ func _moveToRightmost(tls *libc.TLS, pCur uintptr) (r int32) {
 //	** on success.  Set *pRes to 0 if the cursor actually points to something
 //	** or set *pRes to 1 if the table is empty.
 //	*/
-func _sqlite3BtreeFirst(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32) {
+func _nativeSqlite3BtreeFirst(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32) {
 	var rc int32
 	_ = rc
 	rc = _moveToRoot(tls, pCur)
@@ -52573,7 +52573,7 @@ func _sqlite3BtreeFirst(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32) {
 //	** Return SQLITE_OK on success or some error code (ex: SQLITE_NOMEM) if
 //	** something goes wrong.
 //	*/
-func _sqlite3BtreeIsEmpty(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32) {
+func _nativeSqlite3BtreeIsEmpty(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32) {
 	var rc int32
 	_ = rc
 	if libc.Int32FromUint8((*TBtCursor)(unsafe.Pointer(pCur)).FeState) == CURSOR_VALID {
@@ -52620,7 +52620,7 @@ func _btreeLast(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32) {
 	return rc
 }
 
-func _sqlite3BtreeLast(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32) {
+func _nativeSqlite3BtreeLast(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32) {
 	/* If the cursor already points to the last entry, this is a no-op. */
 	if CURSOR_VALID == libc.Int32FromUint8((*TBtCursor)(unsafe.Pointer(pCur)).FeState) && libc.Int32FromUint8((*TBtCursor)(unsafe.Pointer(pCur)).FcurFlags)&int32(BTCF_AtLast) != 0 {
 		*(*int32)(unsafe.Pointer(pRes)) = 0
@@ -52654,7 +52654,7 @@ func _sqlite3BtreeLast(tls *libc.TLS, pCur uintptr, pRes uintptr) (r int32) {
 //	**     *pRes>0      The cursor is left pointing at an entry that
 //	**                  is larger than intKey.
 //	*/
-func _sqlite3BtreeTableMoveto(tls *libc.TLS, pCur uintptr, intKey Ti64, biasRight int32, pRes uintptr) (r int32) {
+func _nativeSqlite3BtreeTableMoveto(tls *libc.TLS, pCur uintptr, intKey Ti64, biasRight int32, pRes uintptr) (r int32) {
 	bp := tls.Alloc(16)
 	defer tls.Free(16)
 	var c, idx, lwr, rc, upr int32
@@ -52892,7 +52892,7 @@ func _cursorOnLastPage(tls *libc.TLS, pCur uintptr) (r int32) {
 //	** The pIdxKey->eqSeen field is set to 1 if there
 //	** exists an entry in the table that exactly matches pIdxKey.
 //	*/
-func _sqlite3BtreeIndexMoveto(tls *libc.TLS, pCur uintptr, pIdxKey uintptr, pRes uintptr) (r int32) {
+func _nativeSqlite3BtreeIndexMoveto(tls *libc.TLS, pCur uintptr, pIdxKey uintptr, pRes uintptr) (r int32) {
 	var c, c1, idx, lwr, nCell, nOverrun, rc, upr, v1 int32
 	var chldPg TPgno
 	var pCell, pCellBody, pCellKey, pPage, v3 uintptr
@@ -53092,7 +53092,7 @@ moveto_index_finish:
 //	** past the last entry in the table or sqlite3BtreePrev() moves past
 //	** the first entry.  TRUE is also returned if the table is empty.
 //	*/
-func _sqlite3BtreeEof(tls *libc.TLS, pCur uintptr) (r int32) {
+func _nativeSqlite3BtreeEof(tls *libc.TLS, pCur uintptr) (r int32) {
 	/* TODO: What if the cursor is in CURSOR_REQUIRESEEK but all table entries
 	 ** have been deleted? This API will need to change to return an error code
 	 ** as well as the boolean result value.
@@ -53107,7 +53107,7 @@ func _sqlite3BtreeEof(tls *libc.TLS, pCur uintptr) (r int32) {
 //	** pointing to.  Return a negative number if no estimate is currently
 //	** available.
 //	*/
-func _sqlite3BtreeRowCountEst(tls *libc.TLS, pCur uintptr) (r Ti64) {
+func _nativeSqlite3BtreeRowCountEst(tls *libc.TLS, pCur uintptr) (r Ti64) {
 	var i Tu8
 	var n Ti64
 	_, _ = i, n
@@ -53223,7 +53223,7 @@ func _btreeNext(tls *libc.TLS, pCur uintptr) (r int32) {
 	return r
 }
 
-func _sqlite3BtreeNext(tls *libc.TLS, pCur uintptr, flags int32) (r int32) {
+func _nativeSqlite3BtreeNext(tls *libc.TLS, pCur uintptr, flags int32) (r int32) {
 	var pPage, v1 uintptr
 	var v2 Tu16
 	_, _, _ = pPage, v1, v2
@@ -53329,7 +53329,7 @@ func _btreePrevious(tls *libc.TLS, pCur uintptr) (r int32) {
 	return rc
 }
 
-func _sqlite3BtreePrevious(tls *libc.TLS, pCur uintptr, flags int32) (r int32) {
+func _nativeSqlite3BtreePrevious(tls *libc.TLS, pCur uintptr, flags int32) (r int32) {
 	var v1 uintptr
 	_ = v1
 	_ = flags /* Used in COMDB2 but not native SQLite */
@@ -56307,7 +56307,7 @@ func _btreeOverwriteCell(tls *libc.TLS, pCur uintptr, pX uintptr) (r int32) {
 //	** key values and pX->aMem can be used instead of pX->pKey to avoid having
 //	** to decode the key.
 //	*/
-func _sqlite3BtreeInsert(tls *libc.TLS, pCur uintptr, pX uintptr, flags int32, seekResult int32) (r int32) {
+func _nativeSqlite3BtreeInsert(tls *libc.TLS, pCur uintptr, pX uintptr, flags int32, seekResult int32) (r int32) {
 	bp := tls.Alloc(160)
 	defer tls.Free(160)
 	var idx int32
@@ -56598,7 +56598,7 @@ end_insert:
 //	**
 //	** SQLITE_OK is returned if successful, or an SQLite error code otherwise.
 //	*/
-func _sqlite3BtreeTransferRow(tls *libc.TLS, pDest uintptr, pSrc uintptr, iKey Ti64) (r int32) {
+func _nativeSqlite3BtreeTransferRow(tls *libc.TLS, pDest uintptr, pSrc uintptr, iKey Ti64) (r int32) {
 	bp := tls.Alloc(32)
 	defer tls.Free(32)
 	var aIn, aOut, pBt, pPageOut, pPgnoOut, pSrcPager, v1 uintptr
@@ -56730,7 +56730,7 @@ func _sqlite3BtreeTransferRow(tls *libc.TLS, pDest uintptr, pSrc uintptr, iKey T
 //	** The BTREE_AUXDELETE bit is a hint that is not used by this implementation,
 //	** but which might be used by alternative storage engines.
 //	*/
-func _sqlite3BtreeDelete(tls *libc.TLS, pCur uintptr, flags Tu8) (r int32) {
+func _nativeSqlite3BtreeDelete(tls *libc.TLS, pCur uintptr, flags Tu8) (r int32) {
 	bp := tls.Alloc(32)
 	defer tls.Free(32)
 	var bPreserve Tu8
@@ -57065,7 +57065,7 @@ func _btreeCreateTable(tls *libc.TLS, p uintptr, piTable uintptr, createTabFlags
 	return SQLITE_OK
 }
 
-func _sqlite3BtreeCreateTable(tls *libc.TLS, p uintptr, piTable uintptr, flags int32) (r int32) {
+func _nativeSqlite3BtreeCreateTable(tls *libc.TLS, p uintptr, piTable uintptr, flags int32) (r int32) {
 	var rc int32
 	_ = rc
 	_sqlite3BtreeEnter(tls, p)
@@ -57169,7 +57169,7 @@ cleardatabasepage_out:
 //	** If pnChange is not NULL, then the integer value pointed to by pnChange
 //	** is incremented by the number of entries in the table.
 //	*/
-func _sqlite3BtreeClearTable(tls *libc.TLS, p uintptr, iTable int32, pnChange uintptr) (r int32) {
+func _nativeSqlite3BtreeClearTable(tls *libc.TLS, p uintptr, iTable int32, pnChange uintptr) (r int32) {
 	var pBt uintptr
 	var rc int32
 	_, _ = pBt, rc
@@ -57196,7 +57196,7 @@ func _sqlite3BtreeClearTable(tls *libc.TLS, p uintptr, iTable int32, pnChange ui
 //	**
 //	** This routine only work for pCur on an ephemeral table.
 //	*/
-func _sqlite3BtreeClearTableOfCursor(tls *libc.TLS, pCur uintptr) (r int32) {
+func _nativeSqlite3BtreeClearTableOfCursor(tls *libc.TLS, pCur uintptr) (r int32) {
 	return _sqlite3BtreeClearTable(tls, (*TBtCursor)(unsafe.Pointer(pCur)).FpBtree, libc.Int32FromUint32((*TBtCursor)(unsafe.Pointer(pCur)).FpgnoRoot), uintptr(0))
 }
 
@@ -57294,7 +57294,7 @@ func _btreeDropTable(tls *libc.TLS, p uintptr, iTable TPgno, piMoved uintptr) (r
 	return *(*int32)(unsafe.Pointer(bp))
 }
 
-func _sqlite3BtreeDropTable(tls *libc.TLS, p uintptr, iTable int32, piMoved uintptr) (r int32) {
+func _nativeSqlite3BtreeDropTable(tls *libc.TLS, p uintptr, iTable int32, piMoved uintptr) (r int32) {
 	var rc int32
 	_ = rc
 	_sqlite3BtreeEnter(tls, p)
@@ -57325,7 +57325,7 @@ func _sqlite3BtreeDropTable(tls *libc.TLS, p uintptr, iTable int32, piMoved uint
 //	** pattern is the same as header meta values, and so it is convenient to
 //	** read it from this routine.
 //	*/
-func _sqlite3BtreeGetMeta(tls *libc.TLS, p uintptr, idx int32, pMeta uintptr) {
+func _nativeSqlite3BtreeGetMeta(tls *libc.TLS, p uintptr, idx int32, pMeta uintptr) {
 	var pBt uintptr
 	_ = pBt
 	pBt = (*TBtree)(unsafe.Pointer(p)).FpBt
@@ -57346,7 +57346,7 @@ func _sqlite3BtreeGetMeta(tls *libc.TLS, p uintptr, idx int32, pMeta uintptr) {
 //	** Write meta-information back into the database.  Meta[0] is
 //	** read-only and may not be written.
 //	*/
-func _sqlite3BtreeUpdateMeta(tls *libc.TLS, p uintptr, idx int32, iMeta Tu32) (r int32) {
+func _nativeSqlite3BtreeUpdateMeta(tls *libc.TLS, p uintptr, idx int32, iMeta Tu32) (r int32) {
 	var pBt, pP1 uintptr
 	var rc int32
 	_, _, _ = pBt, pP1, rc
@@ -57374,7 +57374,7 @@ func _sqlite3BtreeUpdateMeta(tls *libc.TLS, p uintptr, idx int32, iMeta Tu32) (r
 //	** Otherwise, if an error is encountered (i.e. an IO error or database
 //	** corruption) an SQLite error code is returned.
 //	*/
-func _sqlite3BtreeCount(tls *libc.TLS, db uintptr, pCur uintptr, pnEntry uintptr) (r int32) {
+func _nativeSqlite3BtreeCount(tls *libc.TLS, db uintptr, pCur uintptr, pnEntry uintptr) (r int32) {
 	var iIdx, rc int32
 	var nEntry Ti64
 	var pPage uintptr
@@ -57439,7 +57439,7 @@ func _sqlite3BtreeCount(tls *libc.TLS, db uintptr, pCur uintptr, pnEntry uintptr
 //	** Return the pager associated with a BTree.  This routine is used for
 //	** testing and debugging only.
 //	*/
-func _sqlite3BtreePager(tls *libc.TLS, p uintptr) (r uintptr) {
+func _nativeSqlite3BtreePager(tls *libc.TLS, p uintptr) (r uintptr) {
 	return (*TBtShared)(unsafe.Pointer((*TBtree)(unsafe.Pointer(p)).FpBt)).FpPager
 }
 
@@ -58037,7 +58037,7 @@ end_of_check:
 //	** the unverified btrees.  Except, if aRoot[1] is 1, then the freelist
 //	** checks are still performed.
 //	*/
-func _sqlite3BtreeIntegrityCheck(tls *libc.TLS, db uintptr, p uintptr, aRoot uintptr, aCnt uintptr, nRoot int32, mxErr int32, pnErr uintptr, pzOut uintptr) (r int32) {
+func _nativeSqlite3BtreeIntegrityCheck(tls *libc.TLS, db uintptr, p uintptr, aRoot uintptr, aCnt uintptr, nRoot int32, mxErr int32, pnErr uintptr, pzOut uintptr) (r int32) {
 	bp := tls.Alloc(272)
 	defer tls.Free(272)
 	var bCkFreelist, bPartial int32
@@ -58192,7 +58192,7 @@ integrity_ck_cleanup:
 //	** The pager filename is invariant as long as the pager is
 //	** open so it is safe to access without the BtShared mutex.
 //	*/
-func _sqlite3BtreeGetFilename(tls *libc.TLS, p uintptr) (r uintptr) {
+func _nativeSqlite3BtreeGetFilename(tls *libc.TLS, p uintptr) (r uintptr) {
 	return _sqlite3PagerFilename(tls, (*TBtShared)(unsafe.Pointer((*TBtree)(unsafe.Pointer(p)).FpBt)).FpPager, int32(1))
 }
 
@@ -58206,7 +58206,7 @@ func _sqlite3BtreeGetFilename(tls *libc.TLS, p uintptr) (r uintptr) {
 //	** The pager journal filename is invariant as long as the pager is
 //	** open so it is safe to access without the BtShared mutex.
 //	*/
-func _sqlite3BtreeGetJournalname(tls *libc.TLS, p uintptr) (r uintptr) {
+func _nativeSqlite3BtreeGetJournalname(tls *libc.TLS, p uintptr) (r uintptr) {
 	return _sqlite3PagerJournalname(tls, (*TBtShared)(unsafe.Pointer((*TBtree)(unsafe.Pointer(p)).FpBt)).FpPager)
 }
 
@@ -58216,7 +58216,7 @@ func _sqlite3BtreeGetJournalname(tls *libc.TLS, p uintptr) (r uintptr) {
 //	** Return one of SQLITE_TXN_NONE, SQLITE_TXN_READ, or SQLITE_TXN_WRITE
 //	** to describe the current transaction state of Btree p.
 //	*/
-func _sqlite3BtreeTxnState(tls *libc.TLS, p uintptr) (r int32) {
+func _nativeSqlite3BtreeTxnState(tls *libc.TLS, p uintptr) (r int32) {
 	var v1 int32
 	_ = v1
 	if p != 0 {
@@ -58237,7 +58237,7 @@ func _sqlite3BtreeTxnState(tls *libc.TLS, p uintptr) (r int32) {
 //	**
 //	** Parameter eMode is one of SQLITE_CHECKPOINT_PASSIVE, FULL or RESTART.
 //	*/
-func _sqlite3BtreeCheckpoint(tls *libc.TLS, p uintptr, eMode int32, pnLog uintptr, pnCkpt uintptr) (r int32) {
+func _nativeSqlite3BtreeCheckpoint(tls *libc.TLS, p uintptr, eMode int32, pnLog uintptr, pnCkpt uintptr) (r int32) {
 	var pBt uintptr
 	var rc int32
 	_, _ = pBt, rc
@@ -58260,7 +58260,7 @@ func _sqlite3BtreeCheckpoint(tls *libc.TLS, p uintptr, eMode int32, pnLog uintpt
 //	/*
 //	** Return true if there is currently a backup running on Btree p.
 //	*/
-func _sqlite3BtreeIsInBackup(tls *libc.TLS, p uintptr) (r int32) {
+func _nativeSqlite3BtreeIsInBackup(tls *libc.TLS, p uintptr) (r int32) {
 	return libc.BoolInt32((*TBtree)(unsafe.Pointer(p)).FnBackup != 0)
 }
 
@@ -58286,7 +58286,7 @@ func _sqlite3BtreeIsInBackup(tls *libc.TLS, p uintptr) (r int32) {
 //	** blob of allocated memory. The xFree function should not call sqlite3_free()
 //	** on the memory, the btree layer does that.
 //	*/
-func _sqlite3BtreeSchema(tls *libc.TLS, p uintptr, nBytes int32, __ccgo_fp_xFree uintptr) (r uintptr) {
+func _nativeSqlite3BtreeSchema(tls *libc.TLS, p uintptr, nBytes int32, __ccgo_fp_xFree uintptr) (r uintptr) {
 	var pBt uintptr
 	_ = pBt
 	pBt = (*TBtree)(unsafe.Pointer(p)).FpBt
@@ -58306,7 +58306,7 @@ func _sqlite3BtreeSchema(tls *libc.TLS, p uintptr, nBytes int32, __ccgo_fp_xFree
 //	** btree as the argument handle holds an exclusive lock on the
 //	** sqlite_schema table. Otherwise SQLITE_OK.
 //	*/
-func _sqlite3BtreeSchemaLocked(tls *libc.TLS, p uintptr) (r int32) {
+func _nativeSqlite3BtreeSchemaLocked(tls *libc.TLS, p uintptr) (r int32) {
 	var rc int32
 	_ = rc
 	_ = p /* only used in DEBUG builds */
@@ -58323,7 +58323,7 @@ func _sqlite3BtreeSchemaLocked(tls *libc.TLS, p uintptr) (r int32) {
 //	** lock is a write lock if isWritelock is true or a read lock
 //	** if it is false.
 //	*/
-func _sqlite3BtreeLockTable(tls *libc.TLS, p uintptr, iTab int32, isWriteLock Tu8) (r int32) {
+func _nativeSqlite3BtreeLockTable(tls *libc.TLS, p uintptr, iTab int32, isWriteLock Tu8) (r int32) {
 	var lockType Tu8
 	var rc int32
 	_, _ = lockType, rc
@@ -58352,7 +58352,7 @@ func _sqlite3BtreeLockTable(tls *libc.TLS, p uintptr, iTab int32, isWriteLock Tu
 //	** parameters that attempt to write past the end of the existing data,
 //	** no modifications are made and SQLITE_CORRUPT is returned.
 //	*/
-func _sqlite3BtreePutData(tls *libc.TLS, pCsr uintptr, offset Tu32, amt Tu32, z uintptr) (r int32) {
+func _nativeSqlite3BtreePutData(tls *libc.TLS, pCsr uintptr, offset Tu32, amt Tu32, z uintptr) (r int32) {
 	var rc, v1 int32
 	_, _ = rc, v1
 	if libc.Int32FromUint8((*TBtCursor)(unsafe.Pointer(pCsr)).FeState) >= int32(CURSOR_REQUIRESEEK) {
@@ -58394,7 +58394,7 @@ func _sqlite3BtreePutData(tls *libc.TLS, pCsr uintptr, offset Tu32, amt Tu32, z 
 //	/*
 //	** Mark this cursor as an incremental blob cursor.
 //	*/
-func _sqlite3BtreeIncrblobCursor(tls *libc.TLS, pCur uintptr) {
+func _nativeSqlite3BtreeIncrblobCursor(tls *libc.TLS, pCur uintptr) {
 	var v1 uintptr
 	_ = v1
 	v1 = pCur + 1
@@ -58409,7 +58409,7 @@ func _sqlite3BtreeIncrblobCursor(tls *libc.TLS, pCur uintptr) {
 //	** "write version" (single byte at byte offset 19) fields in the database
 //	** header to iVersion.
 //	*/
-func _sqlite3BtreeSetVersion(tls *libc.TLS, pBtree uintptr, iVersion int32) (r int32) {
+func _nativeSqlite3BtreeSetVersion(tls *libc.TLS, pBtree uintptr, iVersion int32) (r int32) {
 	var aData, pBt, v1 uintptr
 	var rc int32
 	_, _, _, _ = aData, pBt, rc, v1
@@ -58448,7 +58448,7 @@ func _sqlite3BtreeSetVersion(tls *libc.TLS, pBtree uintptr, iVersion int32) (r i
 //	** Return true if the cursor has a hint specified.  This routine is
 //	** only used from within assert() statements
 //	*/
-func _sqlite3BtreeCursorHasHint(tls *libc.TLS, pCsr uintptr, mask uint32) (r int32) {
+func _nativeSqlite3BtreeCursorHasHint(tls *libc.TLS, pCsr uintptr, mask uint32) (r int32) {
 	return libc.BoolInt32(uint32((*TBtCursor)(unsafe.Pointer(pCsr)).Fhints)&mask != uint32(0))
 }
 
@@ -58457,7 +58457,7 @@ func _sqlite3BtreeCursorHasHint(tls *libc.TLS, pCsr uintptr, mask uint32) (r int
 //	/*
 //	** Return true if the given Btree is read-only.
 //	*/
-func _sqlite3BtreeIsReadonly(tls *libc.TLS, p uintptr) (r int32) {
+func _nativeSqlite3BtreeIsReadonly(tls *libc.TLS, p uintptr) (r int32) {
 	return libc.BoolInt32(libc.Int32FromUint16((*TBtShared)(unsafe.Pointer((*TBtree)(unsafe.Pointer(p)).FpBt)).FbtsFlags)&int32(BTS_READ_ONLY) != 0)
 }
 
@@ -58476,7 +58476,7 @@ func _sqlite3HeaderSizeBtree(tls *libc.TLS) (r int32) {
 //	** If no transaction is active and the database is not a temp-db, clear
 //	** the in-memory pager cache.
 //	*/
-func _sqlite3BtreeClearCache(tls *libc.TLS, p uintptr) {
+func _nativeSqlite3BtreeClearCache(tls *libc.TLS, p uintptr) {
 	var pBt uintptr
 	_ = pBt
 	pBt = (*TBtree)(unsafe.Pointer(p)).FpBt
@@ -58490,7 +58490,7 @@ func _sqlite3BtreeClearCache(tls *libc.TLS, p uintptr) {
 //	/*
 //	** Return true if the Btree passed as the only argument is sharable.
 //	*/
-func _sqlite3BtreeSharable(tls *libc.TLS, p uintptr) (r int32) {
+func _nativeSqlite3BtreeSharable(tls *libc.TLS, p uintptr) (r int32) {
 	return libc.Int32FromUint8((*TBtree)(unsafe.Pointer(p)).Fsharable)
 }
 
@@ -58501,7 +58501,7 @@ func _sqlite3BtreeSharable(tls *libc.TLS, p uintptr) (r int32) {
 //	** the Btree handle passed as the only argument. For private caches
 //	** this is always 1. For shared caches it may be 1 or greater.
 //	*/
-func _sqlite3BtreeConnectionCount(tls *libc.TLS, p uintptr) (r int32) {
+func _nativeSqlite3BtreeConnectionCount(tls *libc.TLS, p uintptr) (r int32) {
 	return (*TBtShared)(unsafe.Pointer((*TBtree)(unsafe.Pointer(p)).FpBt)).FnRef
 }
 
@@ -59202,7 +59202,7 @@ func _sqlite3BackupRestart(tls *libc.TLS, pBackup uintptr) {
 //	** goes wrong, the transaction on pTo is rolled back. If successful, the
 //	** transaction is committed before returning.
 //	*/
-func _sqlite3BtreeCopyFile(tls *libc.TLS, pTo uintptr, pFrom uintptr) (r int32) {
+func _nativeSqlite3BtreeCopyFile(tls *libc.TLS, pTo uintptr, pFrom uintptr) (r int32) {
 	bp := tls.Alloc(80)
 	defer tls.Free(80)
 	var pFd, v1 uintptr
