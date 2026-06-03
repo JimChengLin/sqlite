@@ -1324,6 +1324,8 @@ func (e *minweightStorageEngine) BtreeSetSpillSize(ctx BtreeContext, p BtreeHand
 	return spillSize
 }
 func (e *minweightStorageEngine) BtreeSetPagerFlags(ctx BtreeContext, p BtreeHandle, pgFlags uint32) (r int32) {
+	bt := e.btree(p)
+	_sqlite3PagerSetFlags(ctx.tls, bt.pager, pgFlags)
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeSetPageSize(ctx BtreeContext, p BtreeHandle, pageSize int32, nReserve int32, iFix int32) (r int32) {

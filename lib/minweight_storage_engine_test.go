@@ -277,6 +277,88 @@ func TestMinweightOpenTracksSharedCacheConnectionCount(t *testing.T) {
 	closeBtree(t, private2)
 }
 
+func TestMinweightBtreeSetPagerFlagsUpdatesFakePager(t *testing.T) {
+	tls := libc.NewTLS()
+	defer tls.Close()
+	if rc := Xsqlite3_initialize(tls); rc != SQLITE_OK {
+		t.Fatalf("sqlite3_initialize rc = %d, want SQLITE_OK", rc)
+	}
+
+	engine := NewMinweightStorageEngine().(*minweightStorageEngine)
+	ctx := BtreeContext{tls: tls}
+	filename := filepath.Join(t.TempDir(), "pager-flags.db")
+	zFilename := minweightAllocCString(ctx, filename)
+	if zFilename == 0 {
+		t.Fatal("minweightAllocCString returned 0")
+	}
+	defer Xsqlite3_free(tls, zFilename)
+
+	var token uintptr
+	if rc := engine.BtreeOpen(
+		ctx,
+		BtreeVFSHandle{},
+		BtreeCStringHandle{tls: tls, ptr: zFilename},
+		SQLiteHandle{},
+		BtreeMemoryHandle{tls: tls, ptr: uintptr(unsafe.Pointer(&token))},
+		0,
+		int32(SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE),
+	); rc != SQLITE_OK {
+		t.Fatalf("BtreeOpen rc = %d, want SQLITE_OK", rc)
+	}
+	btree := BtreeHandle{tls: tls, ptr: token}
+	defer func() {
+		if rc := engine.BtreeClose(ctx, btree); rc != SQLITE_OK {
+			t.Fatalf("BtreeClose rc = %d, want SQLITE_OK", rc)
+		}
+	}()
+	pager := (*Pager)(unsafe.Pointer(engine.btree(btree).pager))
+
+	if rc := engine.BtreeSetPagerFlags(ctx, btree, PAGER_SYNCHRONOUS_OFF); rc != SQLITE_OK {
+		t.Fatalf("BtreeSetPagerFlags(OFF) rc = %d, want SQLITE_OK", rc)
+	}
+	if pager.FnoSync != 1 {
+		t.Fatalf("FnoSync = %d, want 1", pager.FnoSync)
+	}
+	if pager.FfullSync != 0 {
+		t.Fatalf("FfullSync = %d, want 0", pager.FfullSync)
+	}
+	if pager.FextraSync != 0 {
+		t.Fatalf("FextraSync = %d, want 0", pager.FextraSync)
+	}
+	if pager.FsyncFlags != 0 {
+		t.Fatalf("FsyncFlags = %d, want 0", pager.FsyncFlags)
+	}
+	if pager.FwalSyncFlags != 0 {
+		t.Fatalf("FwalSyncFlags = %d, want 0", pager.FwalSyncFlags)
+	}
+	if pager.FdoNotSpill&SPILLFLAG_OFF == 0 {
+		t.Fatalf("FdoNotSpill = %#x, want SPILLFLAG_OFF set", pager.FdoNotSpill)
+	}
+
+	flags := uint32(PAGER_SYNCHRONOUS_EXTRA | PAGER_FULLFSYNC | PAGER_CKPT_FULLFSYNC | PAGER_CACHESPILL)
+	if rc := engine.BtreeSetPagerFlags(ctx, btree, flags); rc != SQLITE_OK {
+		t.Fatalf("BtreeSetPagerFlags(EXTRA) rc = %d, want SQLITE_OK", rc)
+	}
+	if pager.FnoSync != 0 {
+		t.Fatalf("FnoSync = %d, want 0", pager.FnoSync)
+	}
+	if pager.FfullSync != 1 {
+		t.Fatalf("FfullSync = %d, want 1", pager.FfullSync)
+	}
+	if pager.FextraSync != 1 {
+		t.Fatalf("FextraSync = %d, want 1", pager.FextraSync)
+	}
+	if pager.FsyncFlags != SQLITE_SYNC_FULL {
+		t.Fatalf("FsyncFlags = %d, want SQLITE_SYNC_FULL", pager.FsyncFlags)
+	}
+	if pager.FwalSyncFlags != SQLITE_SYNC_FULL<<2|SQLITE_SYNC_FULL {
+		t.Fatalf("FwalSyncFlags = %d, want full sync plus checkpoint full sync", pager.FwalSyncFlags)
+	}
+	if pager.FdoNotSpill&SPILLFLAG_OFF != 0 {
+		t.Fatalf("FdoNotSpill = %#x, want SPILLFLAG_OFF clear", pager.FdoNotSpill)
+	}
+}
+
 func TestMinweightSharedCacheTableLocks(t *testing.T) {
 	tls := libc.NewTLS()
 	defer tls.Close()
