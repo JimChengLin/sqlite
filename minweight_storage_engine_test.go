@@ -146,6 +146,14 @@ func TestMinweightStorageEngineVarcharPrimaryKey(t *testing.T) {
 	if count != 2 {
 		t.Fatalf("count = %d, want 2", count)
 	}
+
+	var name string
+	if err := db.QueryRow("SELECT name FROM products WHERE id = ?", "759f10bd-9e1d-4ec7-b764-0868758d7b85").Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	if name != "b" {
+		t.Fatalf("name = %q, want b", name)
+	}
 }
 
 func TestMinweightStorageEngineIssue19Shape(t *testing.T) {
@@ -221,6 +229,42 @@ func TestMinweightStorageEngineOrderByPreservesColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]int64{"a": 4, "b": 5, "c": 3, "d": 8, "e": 1}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("rows = %v, want %v", got, want)
+	}
+}
+
+func TestMinweightStorageEngineBuiltinWindowSum(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	execMinweightSQL(t, db, "CREATE TABLE t3(x, y)")
+	execMinweightSQL(t, db, "INSERT INTO t3 VALUES('a', 4), ('b', 5), ('c', 3), ('d', 8), ('e', 1)")
+
+	rows, err := db.Query("SELECT x, sum(y) OVER (ORDER BY x ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM t3 ORDER BY x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	got := map[string]int64{}
+	for rows.Next() {
+		var x string
+		var y int64
+		if err := rows.Scan(&x, &y); err != nil {
+			t.Fatal(err)
+		}
+		got[x] = y
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int64{"a": 9, "b": 12, "c": 16, "d": 12, "e": 9}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("rows = %v, want %v", got, want)
 	}

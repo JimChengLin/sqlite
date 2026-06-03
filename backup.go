@@ -11,6 +11,7 @@ import (
 	"io"
 	"strings"
 
+	"modernc.org/libc"
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
@@ -127,11 +128,26 @@ func (b *Backup) Commit() (driver.Conn, error) {
 }
 
 func newLogicalBackup(src *conn, dst *conn) (*logicalBackup, error) {
+	if err := logicalBackupCheckDestination(dst); err != nil {
+		return nil, err
+	}
 	pageCount, err := logicalBackupPageCount(src)
 	if err != nil {
 		return nil, err
 	}
 	return &logicalBackup{src: src, dst: dst, pageCount: pageCount, remaining: pageCount}, nil
+}
+
+func logicalBackupCheckDestination(dst *conn) error {
+	schema, err := libc.CString("main")
+	if err != nil {
+		return err
+	}
+	defer libc.Xfree(dst.tls, schema)
+	if sqlite3.Xsqlite3_txn_state(dst.tls, dst.db, schema) != sqlite3.SQLITE_TXN_NONE {
+		return &Error{msg: "SQL logic error: destination database is in use (1)", code: int(sqlite3.SQLITE_ERROR)}
+	}
+	return nil
 }
 
 func (b *logicalBackup) step(n int32) (bool, error) {

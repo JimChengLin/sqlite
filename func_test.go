@@ -602,9 +602,6 @@ func TestRegisteredFunctions(t *testing.T) {
 
 	// https://www.sqlite.org/windowfunctions.html#user_defined_aggregate_window_functions
 	t.Run("sumFunction as window function", func(tt *testing.T) {
-		if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
-			tt.Skip("minweight storage engine does not yet preserve UDF window-function argument registers")
-		}
 		withDB(func(db *sql.DB) {
 			if _, err := db.Exec("create table t3(x, y); insert into t3 values('a', 4), ('b', 5), ('c', 3), ('d', 8), ('e', 1);"); err != nil {
 				tt.Fatal(err)
@@ -964,10 +961,6 @@ func TestRegisteredFunctions(t *testing.T) {
 	})
 
 	t.Run("restore init failure reads error from dest handle", func(tt *testing.T) {
-		if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
-			tt.Skip("minweight logical restore does not use sqlite3_backup_init error handles")
-		}
-
 		// sqlite3_backup_init stores errors on the *destination* handle.
 		// In restore mode the destination is c.db, so the error must be
 		// read from c.db rather than remoteConn.db.
@@ -1025,10 +1018,6 @@ func TestRegisteredFunctions(t *testing.T) {
 	})
 
 	t.Run("backup init failure reads error from dest handle", func(tt *testing.T) {
-		if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
-			tt.Skip("minweight logical backup does not use sqlite3_backup_init error handles")
-		}
-
 		// sqlite3_backup_init stores errors on the *destination* handle.
 		// In backup mode the destination is remoteConn.db, so the error
 		// must be read from remoteConn.db rather than c.db.

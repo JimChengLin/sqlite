@@ -18,6 +18,10 @@ Last updated: 2026-06-03.
 - Sorted non-int-key `BtreeFirst` and `BtreeLast` cursor snapshots with SQLite index comparison instead of raw key bytes.
 - Added payload fetch padding for SQLite record overread assumptions.
 - Added minweight regressions for unique TEXT lookup, multi-statement `QueryRow`, VARCHAR primary key shape, Issue19-shaped inserts, and ORDER BY column preservation.
+- Matched backup-init destination-in-use failure for minweight logical backup/restore.
+- Added compact VARCHAR primary-key equality lookup coverage.
+- Added built-in window `sum(...) OVER (...)` coverage to isolate the remaining Go UDF window gap.
+- Fixed minweight cursor refresh across ephemeral-table inserts/deletes so built-in and Go UDF window frames see the same rows as SQLite btree.
 
 ## Focused Test Policy
 
@@ -62,18 +66,12 @@ These tests are intentionally skipped only when `SQLITE_TEST_STORAGE_ENGINE=minw
 - `TestVFS`: VFS-backed SQLite page file contents.
 - `TestIsReadOnly`: chmod/read-only filesystem state.
 - `TestFcntlPersistWAL`: WAL files and `PERSIST_WAL` file-control.
-- `TestRegisteredFunctions/sumFunction_as_window_function`: duplicated ephemeral cursor/window UDF argument registers are not preserved yet.
 - `TestRegisteredFunctions/serialize_and_deserialize`: SQLite page image API.
 - `TestRegisteredFunctions/serialize_and_deserialize_allocator`: SQLite page image API.
-- `TestRegisteredFunctions/restore_init_failure_reads_error_from_dest_handle`: sqlite3 backup-init pager error-handle path.
-- `TestRegisteredFunctions/backup_init_failure_reads_error_from_dest_handle`: sqlite3 backup-init pager error-handle path.
 - `TestRegisteredFunctions/QueryContext_with_context_expiring`: running-query interrupt stress semantics.
 - `TestRegisteredFunctions/ExecContext_with_context_expiring`: running-exec interrupt stress semantics.
 
 ## TODO
 
-- Implement duplicated ephemeral cursor/window UDF register semantics so `sumFunction_as_window_function` can run under minweight.
 - Decide whether physical page features remain explicitly unsupported or get a page-file compatibility layer: `sqlite_dbpage`, VFS-backed DB files, `Serialize`, `Deserialize`, WAL persistence, read-only chmod state, and invalid path open behavior are in this bucket.
 - Implement minweight-compatible running statement interruption for expiring context stress tests.
-- Revisit backup-init error-handle tests if logical backup grows pager-like busy/error reporting.
-- Add a compact regression for TEXT/VARCHAR primary-key equality lookup once the planner path for that case is isolated.
