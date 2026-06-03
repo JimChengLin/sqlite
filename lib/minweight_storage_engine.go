@@ -746,6 +746,13 @@ func (e *minweightStorageEngine) BtreeClearCursor(ctx BtreeContext, pCur BtreeCu
 }
 
 func (e *minweightStorageEngine) BtreeCursorHasMoved(ctx BtreeContext, pCur BtreeCursorHandle) (r int32) {
+	if pCur.IsNil() {
+		return 0
+	}
+	cur := e.cursor(pCur)
+	if cur.valid && cur.dataVer != cur.btree.dataVer {
+		return 1
+	}
 	return 0
 }
 
@@ -754,7 +761,35 @@ func (e *minweightStorageEngine) BtreeFakeValidCursor(ctx BtreeContext) (r Btree
 }
 
 func (e *minweightStorageEngine) BtreeCursorRestore(ctx BtreeContext, pCur BtreeCursorHandle, pDifferentRow BtreeMemoryHandle) (r int32) {
-	minweightWriteResult(pDifferentRow, 0)
+	if pCur.IsNil() {
+		minweightWriteResult(pDifferentRow, 0)
+		return SQLITE_OK
+	}
+	cur := e.cursor(pCur)
+	differentRow := int32(0)
+	if cur.valid && cur.dataVer != cur.btree.dataVer {
+		row, ok := cur.current()
+		if !ok {
+			cur.valid = false
+			differentRow = 1
+		} else {
+			if rc := e.refreshCursorRows(ctx, pCur, cur); rc != SQLITE_OK {
+				return rc
+			}
+			if i := minweightFindRow(cur.rows, row, cur.intKey); i >= 0 {
+				cur.index = i
+				cur.valid = true
+				cur.hasLastRow = false
+			} else {
+				cur.index = minweightFindRowAtOrAfter(cur.rows, row, cur.intKey)
+				cur.valid = cur.index < len(cur.rows)
+				cur.lastRow = row
+				cur.hasLastRow = true
+				differentRow = 1
+			}
+		}
+	}
+	minweightWriteResult(pDifferentRow, differentRow)
 	return SQLITE_OK
 }
 

@@ -32,6 +32,7 @@ Last updated: 2026-06-04.
 - Added logical `BtreeCopyFile` snapshot restore and `BtreeSetVersion` file-format cookie updates so VACUUM can replace the target btree without physical SQLite page images.
 - Modeled minweight BTree PRAGMA state for page size, reserve bytes, max page count, secure delete, and auto-vacuum flags.
 - Extended minweight logical `Serialize`/`Deserialize` payloads with those BTree settings while keeping older logical payloads readable.
+- Matched minweight cursor moved/restore behavior for stale cursor snapshots so `OP_Column` and incremental-blob paths can refresh changed rows instead of reading old payloads.
 
 ## Focused Test Policy
 
@@ -63,7 +64,7 @@ Do not run the full `TestRegisteredFunctions` with a 180s timeout as a routine n
 - `TestRegisteredFunctions/ExecContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Verified under minweight on 2026-06-03; keep it out of the focused script and run it only when specifically checking interrupt behavior.
 - `TestIssue53`: passes under minweight but takes about 13s on darwin/arm64. Keep it out of the focused script; run it in full minweight checks or when index seek/order code changes.
 - Full `env SQLITE_TEST_STORAGE_ENGINE=minweight go test ./`: currently about 8m20s on darwin/arm64 because it includes the two expiring-context stress tests. Latest full run: 500.931s on 2026-06-04. Run before commit and after broad engine changes, not after every local edit.
-- `./test-storage-engine.sh`: includes cross-target lib compilation matrix. Run before commit, not after each narrow code edit.
+- `./test-storage-engine.sh`: includes cross-target lib test-binary compilation matrix. Run before commit, not after each narrow code edit.
 
 ## Minweight-Specific Skips
 

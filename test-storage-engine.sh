@@ -40,5 +40,5 @@ for target in \
 	windows/arm64
 do
 	echo "$target"
-	GOOS=${target%/*} GOARCH=${target#*/} go test ./lib
+	GOOS=${target%/*} GOARCH=${target#*/} go test -c -o "${TMPDIR:-/tmp}/sqlite-lib-${target%/*}-${target#*/}.test" ./lib
 done

@@ -16,5 +16,8 @@ minweight_tests='^(TestMinweightStorageEngineSimpleSPJ|TestMinweightStorageEngin
 echo 'run focused minweight storage-engine behavior tests'
 go test -p "$parallel" -parallel "$parallel" -timeout 180s -run "$minweight_tests"
 
+echo 'run focused minweight lib cursor tests'
+go test -p "$parallel" -parallel "$parallel" -timeout 180s ./lib
+
 echo 'run focused minweight serialize behavior tests'
 go test -p "$parallel" -parallel "$parallel" -timeout 180s -run '^TestRegisteredFunctions/(serialize_and_deserialize|serialize_and_deserialize_allocator)$'
