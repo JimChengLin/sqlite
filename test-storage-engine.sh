@@ -5,13 +5,16 @@ parallel=${TEST_PARALLEL:-8}
 : "${GOCACHE:=${TMPDIR:-/tmp}/sqlite-go-cache}"
 export GOCACHE
 
-storage_engine_tests='^(TestStorageEngineAPIIsExternallyImplementable|TestStorageEngineCanBeSelectedFromExternalPackage|TestStorageEngineCanBeSelectedConcurrently|TestStorageEngineHandleAPIsAreExternallyReachable|TestStorageEngineAPIDoesNotExposeRawABIInputs|TestMinweightStorageEngineSimpleSPJ|TestIssue97|TestScalar|TestBlob|TestMemDB|TestSingleConn|TestConcurrentGoroutines|TestBinding|TestBeginMode|TestTxCommitBusyFix|TestConstraintPrimaryKeyError|TestConstraintUniqueError|TestOpenV2FailureErrorMessage|TestBackupProgress|TestPreUpdateHook|TestFcntlDataVersion|TestIsReadOnly|TestDBPageVtab|TestExecReturningMultiRow|TestExecReturningMultiStatement|TestVtabUpdaterInsertUpdateDelete|TestColumnTextScan)$'
+storage_engine_tests='^(TestStorageEngineAPIIsExternallyImplementable|TestStorageEngineCanBeSelectedFromExternalPackage|TestStorageEngineCanBeSelectedConcurrently|TestStorageEngineHandleAPIsAreExternallyReachable|TestStorageEngineAPIDoesNotExposeRawABIInputs|TestMinweightStorageEngineSimpleSPJ|TestMinweightStorageEngineLogicalSerializeRoundTrip|TestIssue97|TestScalar|TestBlob|TestMemDB|TestSingleConn|TestConcurrentGoroutines|TestBinding|TestBeginMode|TestTxCommitBusyFix|TestConstraintPrimaryKeyError|TestConstraintUniqueError|TestOpenV2FailureErrorMessage|TestBackupProgress|TestPreUpdateHook|TestFcntlDataVersion|TestIsReadOnly|TestDBPageVtab|TestExecReturningMultiRow|TestExecReturningMultiStatement|TestVtabUpdaterInsertUpdateDelete|TestColumnTextScan)$'
 
 echo 'compile all packages without running tests'
 go test -p "$parallel" -parallel "$parallel" -run '^$' ./...
 
 echo 'run focused storage-engine behavior tests'
 go test -p "$parallel" -parallel "$parallel" -run "$storage_engine_tests"
+
+echo 'run focused serialize behavior tests'
+go test -p "$parallel" -parallel "$parallel" -run '^TestRegisteredFunctions/(serialize_and_deserialize|serialize_and_deserialize_allocator)$'
 
 echo 'run VFS tests'
 go test -p "$parallel" -parallel "$parallel" ./vfs/...

@@ -9,7 +9,7 @@ Last updated: 2026-06-03.
 - Table rows are stored as `t || root:u32be || sortableRowid:u64be -> recordPayload`.
 - Index entries are stored as `i || root:u32be || sqliteIndexRecordBytes -> sqliteIndexRecordBytes`.
 - Non-integer btrees are ordered with SQLite's own record comparator through `KeyInfo`; byte order alone is not treated as SQLite sort order.
-- `Serialize` and `Deserialize` fail fast under minweight because they expose SQLite page images, which minweight does not model.
+- `Serialize` and `Deserialize` use SQLite page images for the native engine and a minweight logical snapshot for non-native engines.
 
 ## Fixed In This Round
 
@@ -24,6 +24,7 @@ Last updated: 2026-06-03.
 - Fixed minweight cursor refresh across ephemeral-table inserts/deletes so built-in and Go UDF window frames see the same rows as SQLite btree.
 - Matched `mode=ro` readonly handles: minweight now reports `sqlite3_db_readonly` through `BtreeIsReadonly` and rejects write transactions with `SQLITE_READONLY`.
 - Added physical placeholder open handling for path-backed minweight databases so chmod checks can target an on-disk name and invalid parent directories fail with `SQLITE_CANTOPEN`.
+- Added minweight logical `Serialize`/`Deserialize` round-trip support for schema and row data without pretending to expose SQLite page bytes.
 
 ## Focused Test Policy
 
@@ -64,9 +65,7 @@ These tests are intentionally skipped only when `SQLITE_TEST_STORAGE_ENGINE=minw
 - `TestDBPageVtab`: `sqlite_dbpage` exposes physical SQLite pages.
 - `TestVFS`: VFS-backed SQLite page file contents.
 - `TestFcntlPersistWAL`: WAL files and `PERSIST_WAL` file-control.
-- `TestRegisteredFunctions/serialize_and_deserialize`: SQLite page image API.
-- `TestRegisteredFunctions/serialize_and_deserialize_allocator`: SQLite page image API.
 
 ## TODO
 
-- Decide whether physical page features remain explicitly unsupported or get a page-file compatibility layer: `sqlite_dbpage`, VFS-backed DB files, `Serialize`, `Deserialize`, WAL persistence, and chmod-only read-only detection are in this bucket.
+- Decide whether physical page features remain explicitly unsupported or get a page-file compatibility layer: `sqlite_dbpage`, VFS-backed DB files, WAL persistence, and chmod-only read-only detection are in this bucket.

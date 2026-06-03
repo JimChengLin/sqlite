@@ -7,6 +7,8 @@
 package sqlite_test
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
 	"os"
 	"reflect"
@@ -267,6 +269,98 @@ func TestMinweightStorageEngineBuiltinWindowSum(t *testing.T) {
 	want := map[string]int64{"a": 9, "b": 12, "c": 16, "d": 12, "e": 9}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("rows = %v, want %v", got, want)
+	}
+}
+
+func TestMinweightStorageEngineLogicalSerializeRoundTrip(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	type serializer interface {
+		Serialize() ([]byte, error)
+		Deserialize([]byte) error
+	}
+
+	src, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+
+	execMinweightSQL(t, src, "CREATE TABLE t(v TEXT NOT NULL, b BLOB, n INTEGER)")
+	execMinweightSQL(t, src, "CREATE INDEX idx_t_v ON t(v)")
+	execMinweightSQL(t, src, "INSERT INTO t(rowid, v, b, n) VALUES (42, 'alpha', x'000102', 7), (99, 'beta', NULL, NULL)")
+
+	var snapshot []byte
+	srcConn, err := src.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srcConn.Raw(func(dc any) error {
+		var err error
+		snapshot, err = dc.(serializer).Serialize()
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srcConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dst, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dst.Close()
+
+	dstConn, err := dst.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dstConn.Raw(func(dc any) error {
+		return dc.(serializer).Deserialize(snapshot)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dstConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var indexName string
+	if err := dst.QueryRow("SELECT name FROM sqlite_schema WHERE type='index' AND name='idx_t_v'").Scan(&indexName); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := dst.Query("SELECT rowid, v, b, n FROM t INDEXED BY idx_t_v ORDER BY rowid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	type row struct {
+		rowid int64
+		v     string
+		b     []byte
+		n     sql.NullInt64
+	}
+	var got []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.rowid, &r.v, &r.b, &r.n); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("rows = %v, want 2 rows", got)
+	}
+	if got[0].rowid != 42 || got[0].v != "alpha" || !bytes.Equal(got[0].b, []byte{0, 1, 2}) || !got[0].n.Valid || got[0].n.Int64 != 7 {
+		t.Fatalf("row 0 = %+v", got[0])
+	}
+	if got[1].rowid != 99 || got[1].v != "beta" || got[1].b != nil || got[1].n.Valid {
+		t.Fatalf("row 1 = %+v", got[1])
 	}
 }
 

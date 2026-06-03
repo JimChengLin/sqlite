@@ -678,9 +678,6 @@ func TestRegisteredFunctions(t *testing.T) {
 	})
 
 	t.Run("serialize and deserialize", func(tt *testing.T) {
-		if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
-			tt.Skip("sqlite3_serialize exposes SQLite page images; minweight does not model page images yet")
-		}
 		type serializer interface {
 			Serialize() ([]byte, error)
 			Deserialize([]byte) error
@@ -752,9 +749,6 @@ func TestRegisteredFunctions(t *testing.T) {
 	})
 
 	t.Run("serialize and deserialize allocator", func(tt *testing.T) {
-		if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
-			tt.Skip("sqlite3_serialize exposes SQLite page images; minweight does not model page images yet")
-		}
 		// Deserialize passes the buffer to sqlite3_deserialize with FREEONCLOSE|RESIZEABLE,
 		// so the buffer must come from sqlite3_malloc.
 		// If it comes from the wrong allocator, sqlite3_free or sqlite3_realloc on the buffer crashes.

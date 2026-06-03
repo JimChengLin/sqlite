@@ -1058,7 +1058,7 @@ func (c *conn) query(ctx context.Context, query string, args []driver.NamedValue
 // which would be written to disk if that database where backed up to disk.
 func (c *conn) Serialize() (v []byte, err error) {
 	if !sqlite3.StorageEngineIsNative() {
-		return nil, fmt.Errorf("sqlite: Serialize requires SQLite page images; current storage engine does not support it")
+		return logicalSerialize(c)
 	}
 
 	pLen := c.tls.Alloc(8)
@@ -1092,7 +1092,7 @@ func (c *conn) Deserialize(buf []byte) (err error) {
 		return fmt.Errorf("sqlite: empty buffer passed to Deserialize")
 	}
 	if !sqlite3.StorageEngineIsNative() {
-		return fmt.Errorf("sqlite: Deserialize requires SQLite page images; current storage engine does not support it")
+		return logicalDeserialize(c, buf)
 	}
 
 	pBuf := sqlite3.Xsqlite3_malloc64(c.tls, uint64(bufLen))
