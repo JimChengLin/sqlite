@@ -34,6 +34,7 @@ Last updated: 2026-06-04.
 - Extended minweight logical `Serialize`/`Deserialize` payloads with those BTree settings while keeping older logical payloads readable.
 - Matched minweight cursor moved/restore behavior for stale cursor snapshots so `OP_Column` and incremental-blob paths can refresh changed rows instead of reading old payloads.
 - Added minweight logical `BtreeIntegrityCheck`: it scans the minweight KV snapshot, validates table/index key shapes, root metadata, row counts, and int-key rowid bounds, then feeds row counts back to SQLite's `integrity_check` registers.
+- Matched incremental blob `BtreePutData` bounds: writes past the existing payload now return `SQLITE_CORRUPT` without growing or modifying the row.
 
 ## Focused Test Policy
 

@@ -1938,14 +1938,11 @@ func (e *minweightStorageEngine) BtreePutData(ctx BtreeContext, pCsr BtreeCursor
 		return SQLITE_ERROR
 	}
 	payload := append([]byte(nil), row.payload...)
-	end := int(offset + amt)
-	if int(offset) > len(payload) {
+	end := uint64(offset) + uint64(amt)
+	if end > uint64(len(payload)) {
 		return SQLITE_CORRUPT
 	}
-	if end > len(payload) {
-		payload = append(payload, make([]byte, end-len(payload))...)
-	}
-	copy(payload[offset:end], z.ReadBytes(int(amt)))
+	copy(payload[int(offset):int(end)], z.ReadBytes(int(amt)))
 	if err := cur.btree.store.Put(minweightTableKey(cur.root, row.rowid), payload); err != nil {
 		return minweightSQLiteError(err)
 	}
