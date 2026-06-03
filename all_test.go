@@ -4489,10 +4489,6 @@ func TestExecReturningCancelDuringDrain(t *testing.T) {
 }
 
 func TestDBPageVtab(t *testing.T) {
-	if os.Getenv("SQLITE_TEST_STORAGE_ENGINE") == "minweight" {
-		t.Skip("sqlite_dbpage exposes physical SQLite pages; minweight does not model SQLite page images yet")
-	}
-
 	// Open an in-memory database
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

@@ -633,6 +633,46 @@ func TestMinweightStorageEngineMmapSizePragma(t *testing.T) {
 	}
 }
 
+func TestMinweightStorageEngineDBPageVtabLogicalHeader(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	execMinweightSQL(t, db, `
+		CREATE TABLE test_dbpage (id INTEGER PRIMARY KEY, val TEXT);
+		INSERT INTO test_dbpage (val) VALUES ('hello dbpage');
+	`)
+
+	if got := minweightQueryInt(t, db, "SELECT count(*) FROM sqlite_dbpage"); got != 1 {
+		t.Fatalf("sqlite_dbpage row count = %d, want 1", got)
+	}
+
+	var pgno int
+	var data []byte
+	if err := db.QueryRow("SELECT pgno, data FROM sqlite_dbpage WHERE pgno = 1").Scan(&pgno, &data); err != nil {
+		t.Fatal(err)
+	}
+	if pgno != 1 {
+		t.Fatalf("pgno = %d, want 1", pgno)
+	}
+	if pageSize := int(minweightQueryInt(t, db, "PRAGMA page_size")); len(data) != pageSize {
+		t.Fatalf("page len = %d, want %d", len(data), pageSize)
+	}
+	if header := []byte("SQLite format 3\x00"); !bytes.Equal(data[:len(header)], header) {
+		t.Fatalf("page header = %q, want %q", data[:len(header)], header)
+	}
+	if got := minweightQueryInt(t, db, "SELECT count(*) FROM sqlite_dbpage WHERE pgno = 0"); got != 0 {
+		t.Fatalf("pgno=0 row count = %d, want 0", got)
+	}
+	if got := minweightQueryInt(t, db, "SELECT count(*) FROM sqlite_dbpage WHERE pgno = 2"); got != 0 {
+		t.Fatalf("pgno=2 row count = %d, want 0", got)
+	}
+}
+
 func TestMinweightStorageEngineChmodOnlyReadOnlyOpen(t *testing.T) {
 	installMinweightStorageEngineForTest(t)
 

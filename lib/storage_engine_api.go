@@ -185,6 +185,22 @@ func StorageEngineIsNative() bool {
 	return ok
 }
 
+func storageEngineLogicalDBPageResult(tls *libc.TLS, ctx uintptr, pageSize int32) int32 {
+	if pageSize <= 0 {
+		pageSize = 4096
+	}
+	p := tls.Alloc(int(pageSize))
+	if p == 0 {
+		return SQLITE_NOMEM
+	}
+	defer tls.Free(int(pageSize))
+	page := unsafe.Slice((*byte)(unsafe.Pointer(p)), int(pageSize))
+	clear(page)
+	copy(page, "SQLite format 3\x00")
+	Xsqlite3_result_blob(tls, ctx, p, pageSize, SQLITE_TRANSIENT)
+	return SQLITE_OK
+}
+
 // SetStorageEngine sets the btree storage engine. Passing nil restores the generated SQLite btree implementation.
 func SetStorageEngine(engine StorageEngine) {
 	if engine == nil {

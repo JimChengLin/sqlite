@@ -193423,6 +193423,16 @@ func _dbpageFilter(tls *libc.TLS, pCursor uintptr, idxNum int32, idxStr uintptr,
 	if (*TDbpageCursor)(unsafe.Pointer(pCsr)).FpPage1 != 0 {
 		_sqlite3PagerUnrefPageOne(tls, (*TDbpageCursor)(unsafe.Pointer(pCsr)).FpPage1)
 	}
+	if !StorageEngineIsNative() {
+		(*TDbpageCursor)(unsafe.Pointer(pCsr)).FpPager = 0
+		(*TDbpageCursor)(unsafe.Pointer(pCsr)).FpPage1 = 0
+		(*TDbpageCursor)(unsafe.Pointer(pCsr)).FmxPgno = uint32(1)
+		if idxNum&int32(1) != 0 && Xsqlite3_value_int(tls, *(*uintptr)(unsafe.Pointer(argv + uintptr(idxNum>>int32(1))*8))) != 1 {
+			(*TDbpageCursor)(unsafe.Pointer(pCsr)).Fpgno = uint32(1)
+			(*TDbpageCursor)(unsafe.Pointer(pCsr)).FmxPgno = uint32(0)
+		}
+		return SQLITE_OK
+	}
 	rc = _sqlite3PagerGet(tls, (*TDbpageCursor)(unsafe.Pointer(pCsr)).FpPager, uint32(1), pCsr+24, 0)
 	return rc
 }
@@ -193440,6 +193450,9 @@ func _dbpageColumn(tls *libc.TLS, pCursor uintptr, ctx uintptr, i int32) (r int3
 	case 0: /* pgno */
 		Xsqlite3_result_int64(tls, ctx, libc.Int64FromUint32((*TDbpageCursor)(unsafe.Pointer(pCsr)).Fpgno))
 	case int32(1): /* data */
+		if !StorageEngineIsNative() {
+			return storageEngineLogicalDBPageResult(tls, ctx, (*TDbpageCursor)(unsafe.Pointer(pCsr)).FszPage)
+		}
 		*(*uintptr)(unsafe.Pointer(bp)) = uintptr(0)
 		if (*TDbpageCursor)(unsafe.Pointer(pCsr)).Fpgno == libc.Uint32FromInt32(_sqlite3PendingByte/(*TDbpageCursor)(unsafe.Pointer(pCsr)).FszPage+libc.Int32FromInt32(1)) {
 			/* The pending byte page. Assume it is zeroed out. Attempting to
@@ -232436,4 +232449,3 @@ type Sqlite3_index_info = sqlite3_index_info
 type Sqlite3_module = sqlite3_module
 type Sqlite3_vtab = sqlite3_vtab
 type Sqlite3_vtab_cursor = sqlite3_vtab_cursor
-
