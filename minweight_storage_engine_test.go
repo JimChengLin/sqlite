@@ -708,6 +708,78 @@ func TestMinweightStorageEngineLogicalSerializePreservesBtreePragmaState(t *test
 	}
 }
 
+func TestMinweightStorageEngineLogicalSerializePreservesReusedTableRoot(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	type serializer interface {
+		Serialize() ([]byte, error)
+		Deserialize([]byte) error
+	}
+
+	src, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+
+	execMinweightSQL(t, src, "CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, src, "CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, src, "DROP TABLE a")
+	execMinweightSQL(t, src, "CREATE TABLE c(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, src, "INSERT INTO b(id, v) VALUES (1, 'one')")
+	execMinweightSQL(t, src, "INSERT INTO c(id, v) VALUES (2, 'two')")
+
+	wantRootPages := map[string]int{"b": 3, "c": 2}
+	if got := minweightRootPages(t, src, "b", "c"); !reflect.DeepEqual(got, wantRootPages) {
+		t.Fatalf("source rootpages = %v, want %v", got, wantRootPages)
+	}
+
+	var snapshot []byte
+	srcConn, err := src.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srcConn.Raw(func(dc any) error {
+		var err error
+		snapshot, err = dc.(serializer).Serialize()
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srcConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dst, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dst.Close()
+
+	dstConn, err := dst.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dstConn.Raw(func(dc any) error {
+		return dc.(serializer).Deserialize(snapshot)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dstConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := minweightRootPages(t, dst, "b", "c"); !reflect.DeepEqual(got, wantRootPages) {
+		t.Fatalf("deserialized rootpages = %v, want %v", got, wantRootPages)
+	}
+	if got := minweightQueryInt(t, dst, "SELECT count(*) FROM b WHERE v = 'one'"); got != 1 {
+		t.Fatalf("deserialized b row count = %d, want 1", got)
+	}
+	if got := minweightQueryInt(t, dst, "SELECT count(*) FROM c WHERE v = 'two'"); got != 1 {
+		t.Fatalf("deserialized c row count = %d, want 1", got)
+	}
+}
+
 func TestMinweightStorageEngineTransactionRollbackRestoresRows(t *testing.T) {
 	installMinweightStorageEngineForTest(t)
 

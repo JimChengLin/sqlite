@@ -49,6 +49,7 @@ Last updated: 2026-06-04.
 - Matched minweight `BtreeSetPagerFlags` fake-pager state by reusing SQLite's generated pager flag logic for sync mode, WAL sync flags, and cache-spill flags; this keeps internal pager metadata aligned without adding real page-file sync behavior.
 - Matched auto-vacuum `DROP TABLE` root-page movement: when SQLite asks to drop a non-largest root, minweight now moves the largest logical root into the gap, reports `piMoved`, and keeps `sqlite_schema.rootpage` plus indexed lookups aligned with native btree.
 - Matched ordinary `DROP TABLE` root reuse: minweight now records freed logical root pages and lets subsequent `BtreeCreateTable` reuse them, keeping `sqlite_schema.rootpage` stable like native btree without modeling the physical freelist pages.
+- Matched logical serialize/backup schema replay order for reused table roots by sorting root-bearing schema objects by `rootpage` within each object kind, so table-level root reuse survives minweight logical round-trips.
 
 ## Focused Test Policy
 
@@ -94,3 +95,4 @@ These tests are intentionally skipped only when `SQLITE_TEST_STORAGE_ENGINE=minw
 ## TODO
 
 - Decide whether physical page features remain explicitly unsupported or get a page-file compatibility layer: `sqlite_dbpage`, VFS-backed DB files, valid WAL frame contents, and chmod-only read-only detection are in this bucket. The current minweight integrity check is logical only and does not validate SQLite page images.
+- Preserve more exotic logical round-trip root shapes where an index rootpage is lower than its owning table rootpage. Current logical replay still creates tables before indexes, so this remains separate from physical page-image backup.

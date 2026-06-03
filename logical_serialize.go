@@ -212,7 +212,10 @@ func logicalSerializeSchema(c *conn) ([]logicalSerializedSchema, error) {
 			WHEN 'trigger' THEN 2
 			WHEN 'view' THEN 3
 			ELSE 4
-		END, rowid`)
+		END,
+		CASE WHEN rootpage > 0 THEN 0 ELSE 1 END,
+		CASE WHEN rootpage > 0 THEN rootpage ELSE rowid END,
+		rowid`)
 	if err != nil {
 		return nil, err
 	}
