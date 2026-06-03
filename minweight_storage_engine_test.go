@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -629,6 +630,66 @@ func TestMinweightStorageEngineMmapSizePragma(t *testing.T) {
 	}
 	if got := minweightQueryInt(t, db, "PRAGMA mmap_size = 0"); got != 0 {
 		t.Fatalf("mmap_size reset result = %d, want 0", got)
+	}
+}
+
+func TestMinweightStorageEngineChmodOnlyReadOnlyOpen(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	path := filepath.Join(t.TempDir(), "readonly.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execMinweightSQL(t, db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, db, "INSERT INTO t(v) VALUES ('a')")
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Chmod(path, 0400); err != nil {
+		t.Skipf("chmod not supported: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(path, 0600)
+	})
+	probe, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err == nil {
+		_ = probe.Close()
+		t.Skip("chmod did not restrict write opens on this platform")
+	}
+
+	ro, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+
+	conn, err := ro.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Raw(func(dc any) error {
+		readOnly, err := dc.(interface{ IsReadOnly(string) (bool, error) }).IsReadOnly("main")
+		if err != nil {
+			return err
+		}
+		if !readOnly {
+			return fmt.Errorf("IsReadOnly('main') = false, want true")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := minweightQueryInt(t, ro, "SELECT count(*) FROM t WHERE v = 'a'"); got != 1 {
+		t.Fatalf("readonly row count = %d, want 1", got)
+	}
+	if _, err := ro.Exec("INSERT INTO t(v) VALUES ('b')"); err == nil {
+		t.Fatal("readonly insert succeeded, want error")
 	}
 }
 

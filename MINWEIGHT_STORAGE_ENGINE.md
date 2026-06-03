@@ -54,6 +54,7 @@ Last updated: 2026-06-04.
 - Matched logical `Backup`/`Restore` schema replay with the same rootpage-aware path used by `Serialize`/`Deserialize`, including the tested lower-root index shape.
 - Fixed logical restore `Finish`: the backup state is now released before closing the remote source connection, so `FinishLogicalBackup` still sees the source handle.
 - Preserved minweight hidden root allocation metadata (`nextRoot` and `freeRoots`) across logical `Serialize`/`Deserialize`, `Backup`, and `Restore`, so later `CREATE TABLE` root reuse follows the source freelist order even when visible `sqlite_schema.rootpage` is ambiguous.
+- Matched chmod-only readonly opens for existing path-backed minweight databases: when a read-write placeholder open is denied but read-only open succeeds, the handle is marked readonly and rejects writes without requiring `mode=ro`.
 
 ## Focused Test Policy
 
@@ -67,7 +68,15 @@ Routine minweight check:
 
 This focused list includes `TestMinweightStorageEngineIntegrityCheck` plus the direct `./lib` minweight integrity/cursor tests.
 
-Full top-level minweight check, run after broad engine semantics changes or before larger milestones:
+Broad top-level minweight check without the two context-expiration stress subtests:
+
+```sh
+./test-minweight-broad.sh
+```
+
+Latest broad run: 100.182s on 2026-06-04 with `-p 8 -parallel 8`. Run this after non-interrupt engine behavior changes when the full context stress coverage is not the point.
+
+Full top-level minweight check, run after broad engine semantics changes, context-interrupt changes, or before larger milestones:
 
 ```sh
 env SQLITE_TEST_STORAGE_ENGINE=minweight TEST_PARALLEL=8 GOCACHE=${TMPDIR:-/tmp}/sqlite-go-cache go test -p 8 -parallel 8 -timeout 10m ./
@@ -98,4 +107,4 @@ These tests are intentionally skipped only when `SQLITE_TEST_STORAGE_ENGINE=minw
 
 ## TODO
 
-- Decide whether physical page features remain explicitly unsupported or get a page-file compatibility layer: `sqlite_dbpage`, VFS-backed DB files, valid WAL frame contents, and chmod-only read-only detection are in this bucket. The current minweight integrity check is logical only and does not validate SQLite page images.
+- Decide whether physical page features remain explicitly unsupported or get a page-file compatibility layer: `sqlite_dbpage`, VFS-backed DB files, and valid WAL frame contents are in this bucket. The current minweight integrity check is logical only and does not validate SQLite page images.

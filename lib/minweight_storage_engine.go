@@ -274,28 +274,35 @@ func minweightDatabaseKey(zFilename BtreeCStringHandle) string {
 	}
 }
 
-func minweightOpenPlaceholder(filename string, readOnly bool) int32 {
+func minweightOpenPlaceholder(filename string, readOnly bool) (bool, int32) {
 	if filename == "" {
-		return SQLITE_OK
+		return readOnly, SQLITE_OK
 	}
 	if readOnly {
 		f, err := os.Open(filename)
 		if err != nil {
-			return SQLITE_CANTOPEN
+			return readOnly, SQLITE_CANTOPEN
 		}
 		if err := f.Close(); err != nil {
-			return SQLITE_CANTOPEN
+			return readOnly, SQLITE_CANTOPEN
 		}
-		return SQLITE_OK
+		return readOnly, SQLITE_OK
 	}
 	f, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
-		return SQLITE_CANTOPEN
+		f, err := os.Open(filename)
+		if err != nil {
+			return readOnly, SQLITE_CANTOPEN
+		}
+		if err := f.Close(); err != nil {
+			return readOnly, SQLITE_CANTOPEN
+		}
+		return true, SQLITE_OK
 	}
 	if err := f.Close(); err != nil {
-		return SQLITE_CANTOPEN
+		return readOnly, SQLITE_CANTOPEN
 	}
-	return SQLITE_OK
+	return readOnly, SQLITE_OK
 }
 
 func minweightClampMmapLimit(szMmap Tsqlite3_int64) Tsqlite3_int64 {
@@ -1182,7 +1189,9 @@ func (e *minweightStorageEngine) BtreeOpen(ctx BtreeContext, pVfs BtreeVFSHandle
 				return SQLITE_CANTOPEN
 			}
 		}
-		if rc := minweightOpenPlaceholder(key, readOnly); rc != SQLITE_OK {
+		var rc int32
+		readOnly, rc = minweightOpenPlaceholder(key, readOnly)
+		if rc != SQLITE_OK {
 			return rc
 		}
 	}
