@@ -69,7 +69,7 @@ Do not run the full `TestRegisteredFunctions` with a 180s timeout as a routine n
 - `TestRegisteredFunctions/QueryContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Verified under minweight on 2026-06-03; keep it out of the focused script and run it only when specifically checking interrupt behavior.
 - `TestRegisteredFunctions/ExecContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Verified under minweight on 2026-06-03; keep it out of the focused script and run it only when specifically checking interrupt behavior.
 - `TestIssue53`: passes under minweight but takes about 13s on darwin/arm64. Keep it out of the focused script; run it in full minweight checks or when index seek/order code changes.
-- Full `env SQLITE_TEST_STORAGE_ENGINE=minweight go test ./`: currently about 8m20s on darwin/arm64 because it includes the two expiring-context stress tests. Latest full run: 500.931s on 2026-06-04. Run before commit and after broad engine changes, not after every local edit.
+- Full `env SQLITE_TEST_STORAGE_ENGINE=minweight go test ./`: currently about 8m20s on darwin/arm64 because it includes the two expiring-context stress tests. Latest full run: 500.931s on 2026-06-04. Run after broad engine changes or before larger milestones, not after every narrow commit.
 - `./test-storage-engine.sh`: includes cross-target lib test-binary compilation matrix. Run before commit, not after each narrow code edit.
 
 ## Minweight-Specific Skips
