@@ -81,9 +81,22 @@ type minweightBtree struct {
 	sharable    bool
 	persistWAL  bool
 	backupCount int32
+	mmapSize    int64
 	walActive   bool
 	txSnapshot  *minweightSnapshot
 	savepoints  []minweightSnapshot
+}
+
+type minweightFile struct {
+	Tsqlite3_file
+	btreeToken uintptr
+}
+
+var minweightFileMethods = Tsqlite3_io_methods{
+	FiVersion:               1,
+	FxFileControl:           __ccgo_fp(minweightFileControl),
+	FxSectorSize:            __ccgo_fp(minweightFileSectorSize),
+	FxDeviceCharacteristics: __ccgo_fp(minweightFileDeviceCharacteristics),
 }
 
 type minweightTable struct {
@@ -175,6 +188,12 @@ func (e *minweightStorageEngine) btreeForDB(db SQLiteHandle) *minweightBtree {
 	return e.btrees[e.aliases[db.ptr]]
 }
 
+func (e *minweightStorageEngine) btreeForToken(token uintptr) *minweightBtree {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.btrees[token]
+}
+
 func (e *minweightStorageEngine) cursor(pCur BtreeCursorHandle) *minweightCursor {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -183,6 +202,14 @@ func (e *minweightStorageEngine) cursor(pCur BtreeCursorHandle) *minweightCursor
 		panic("sqlite minweight storage engine: unknown cursor handle")
 	}
 	return cur
+}
+
+func minweightBtreeForFile(pFile uintptr) *minweightBtree {
+	engine, ok := storageEngine().(*minweightStorageEngine)
+	if !ok {
+		return nil
+	}
+	return engine.btreeForToken((*minweightFile)(unsafe.Pointer(pFile)).btreeToken)
 }
 
 func minweightSQLiteError(err error) int32 {
@@ -267,6 +294,40 @@ func minweightOpenPlaceholder(filename string, readOnly bool) int32 {
 		return SQLITE_CANTOPEN
 	}
 	return SQLITE_OK
+}
+
+func minweightClampMmapLimit(szMmap Tsqlite3_int64) Tsqlite3_int64 {
+	if szMmap > _sqlite3Config.FmxMmap {
+		return _sqlite3Config.FmxMmap
+	}
+	return szMmap
+}
+
+func minweightFileControl(tls *libc.TLS, pFile uintptr, op int32, pArg uintptr) int32 {
+	if op != int32(SQLITE_FCNTL_MMAP_SIZE) {
+		return SQLITE_NOTFOUND
+	}
+	bt := minweightBtreeForFile(pFile)
+	if bt == nil {
+		return SQLITE_NOTFOUND
+	}
+	newLimit := minweightClampMmapLimit(*(*Tsqlite3_int64)(unsafe.Pointer(pArg)))
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	*(*Tsqlite3_int64)(unsafe.Pointer(pArg)) = Tsqlite3_int64(bt.mmapSize)
+	if newLimit >= 0 {
+		bt.mmapSize = int64(newLimit)
+		(*Pager)(unsafe.Pointer(bt.pager)).FszMmap = newLimit
+	}
+	return SQLITE_OK
+}
+
+func minweightFileSectorSize(tls *libc.TLS, pFile uintptr) int32 {
+	return SQLITE_DEFAULT_SECTOR_SIZE
+}
+
+func minweightFileDeviceCharacteristics(tls *libc.TLS, pFile uintptr) int32 {
+	return 0
 }
 
 func minweightAllocCString(ctx BtreeContext, s string) uintptr {
@@ -1088,8 +1149,9 @@ func (e *minweightStorageEngine) BtreeOpen(ctx BtreeContext, pVfs BtreeVFSHandle
 		}
 	}
 	pager := _sqlite3MallocZero(ctx.tls, uint64(unsafe.Sizeof(Pager{})))
-	file := _sqlite3MallocZero(ctx.tls, uint64(unsafe.Sizeof(Tsqlite3_file{})))
+	file := _sqlite3MallocZero(ctx.tls, uint64(unsafe.Sizeof(minweightFile{})))
 	journal := _sqlite3MallocZero(ctx.tls, uint64(unsafe.Sizeof(Tsqlite3_file{})))
+	(*Tsqlite3_file)(unsafe.Pointer(file)).FpMethods = uintptr(unsafe.Pointer(&minweightFileMethods))
 	(*Pager)(unsafe.Pointer(pager)).FpageSize = 4096
 	(*Pager)(unsafe.Pointer(pager)).Ffd = file
 	(*Pager)(unsafe.Pointer(pager)).Fjfd = journal
@@ -1147,6 +1209,7 @@ func (e *minweightStorageEngine) BtreeOpen(ctx BtreeContext, pVfs BtreeVFSHandle
 	}
 	token := e.nextToken()
 	e.btrees[token] = bt
+	(*minweightFile)(unsafe.Pointer(file)).btreeToken = token
 	if db.ptr != 0 && e.aliases[db.ptr] == 0 {
 		e.aliases[db.ptr] = token
 	}
@@ -2342,6 +2405,12 @@ func (e *minweightStorageEngine) BtreeCopyFile(ctx BtreeContext, pTo BtreeHandle
 }
 
 func (e *minweightStorageEngine) BtreeSetMmapLimit(ctx BtreeContext, p BtreeHandle, szMmap int64) (r int32) {
+	bt := e.btree(p)
+	bt.mu.Lock()
+	mmapSize := minweightClampMmapLimit(Tsqlite3_int64(szMmap))
+	bt.mmapSize = int64(mmapSize)
+	(*Pager)(unsafe.Pointer(bt.pager)).FszMmap = mmapSize
+	bt.mu.Unlock()
 	return SQLITE_OK
 }
 

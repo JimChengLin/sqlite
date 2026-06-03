@@ -527,6 +527,30 @@ func TestMinweightStorageEngineBtreePragmaState(t *testing.T) {
 	}
 }
 
+func TestMinweightStorageEngineMmapSizePragma(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	dbPath := t.TempDir() + "/mmap.db"
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if got := minweightQueryInt(t, db, "PRAGMA mmap_size"); got != 0 {
+		t.Fatalf("default mmap_size = %d, want 0", got)
+	}
+	if got := minweightQueryInt(t, db, "PRAGMA mmap_size = 65536"); got != 65536 {
+		t.Fatalf("mmap_size set result = %d, want 65536", got)
+	}
+	if got := minweightQueryInt(t, db, "PRAGMA mmap_size"); got != 65536 {
+		t.Fatalf("mmap_size = %d, want 65536", got)
+	}
+	if got := minweightQueryInt(t, db, "PRAGMA mmap_size = 0"); got != 0 {
+		t.Fatalf("mmap_size reset result = %d, want 0", got)
+	}
+}
+
 func TestMinweightStorageEngineLogicalSerializePreservesBtreePragmaState(t *testing.T) {
 	installMinweightStorageEngineForTest(t)
 

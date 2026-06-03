@@ -10,7 +10,7 @@ Last updated: 2026-06-04.
 - Index entries are stored as `i || root:u32be || sqliteIndexRecordBytes -> sqliteIndexRecordBytes`.
 - Non-integer btrees are ordered with SQLite's own record comparator through `KeyInfo`; byte order alone is not treated as SQLite sort order.
 - `Serialize` and `Deserialize` use SQLite page images for the native engine and a minweight logical snapshot for non-native engines.
-- Minweight models user-visible BTree settings for `PRAGMA page_size`, `PRAGMA auto_vacuum`, `PRAGMA secure_delete`, and `PRAGMA max_page_count`; these are logical settings, not real page-file contents.
+- Minweight models user-visible BTree settings for `PRAGMA page_size`, reserve bytes, `PRAGMA auto_vacuum`, `PRAGMA secure_delete`, `PRAGMA max_page_count`, `PRAGMA cache_size`, `PRAGMA cache_spill`, and path-backed `PRAGMA mmap_size`; these are logical settings, not real page-file contents.
 
 ## Fixed In This Round
 
@@ -45,6 +45,7 @@ Last updated: 2026-06-04.
 - Matched raw cursor pin flags for minweight `BtreeCursorPin`/`BtreeCursorUnpin`: pinning toggles only `BTCF_Pinned` and preserves other `BtCursor.FcurFlags` bits like native btree.
 - Matched minweight `PRAGMA cache_size`/`cache_spill` visible state by tracking `BtreeSetCacheSize` and returning native-style effective values from `BtreeSetSpillSize`.
 - Matched logical backup source state for minweight: unfinished backups now make `BtreeIsInBackup` true, so SQLite's busy checks reject closing the source connection until `Finish`/`Commit` releases the backup.
+- Matched minweight `PRAGMA mmap_size` visible state for path-backed databases by attaching minimal fake-file `xFileControl` support for `SQLITE_FCNTL_MMAP_SIZE`; this records the advisory limit but does not implement real memory mapping.
 
 ## Focused Test Policy
 
