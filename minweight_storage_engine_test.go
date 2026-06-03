@@ -478,6 +478,41 @@ func TestMinweightStorageEngineDropTableMovesAutoVacuumRoot(t *testing.T) {
 	}
 }
 
+func TestMinweightStorageEngineDropTableReusesFreedRoot(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	execMinweightSQL(t, db, "CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, db, "CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT)")
+	before := minweightRootPages(t, db, "a", "b")
+	wantBefore := map[string]int{"a": 2, "b": 3}
+	if !reflect.DeepEqual(before, wantBefore) {
+		t.Fatalf("rootpages before drop = %v, want %v", before, wantBefore)
+	}
+
+	execMinweightSQL(t, db, "DROP TABLE a")
+	execMinweightSQL(t, db, "CREATE TABLE c(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, db, "INSERT INTO c(id, v) VALUES (7, 'seven')")
+
+	after := minweightRootPages(t, db, "b", "c")
+	wantAfter := map[string]int{"b": 3, "c": 2}
+	if !reflect.DeepEqual(after, wantAfter) {
+		t.Fatalf("rootpages after reuse = %v, want %v", after, wantAfter)
+	}
+	var v string
+	if err := db.QueryRow("SELECT v FROM c WHERE id = 7").Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	if v != "seven" {
+		t.Fatalf("c.v = %q, want seven", v)
+	}
+}
+
 func TestMinweightStorageEngineBtreePragmaState(t *testing.T) {
 	installMinweightStorageEngineForTest(t)
 

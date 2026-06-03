@@ -61,6 +61,7 @@ type minweightDatabase struct {
 	autoVacuum    int32
 	cacheSize     int32
 	spillSize     int32
+	freeRoots     []uint32
 	readers       map[*minweightBtree]bool
 	writer        *minweightBtree
 	sharedRefs    int32
@@ -144,6 +145,7 @@ type minweightSnapshot struct {
 	maxPageCount  uint32
 	secureDelete  int32
 	autoVacuum    int32
+	freeRoots     []uint32
 }
 
 type minweightSnapshotItem struct {
@@ -454,6 +456,10 @@ func minweightCloneTables(src map[uint32]minweightTable) map[uint32]minweightTab
 	return dst
 }
 
+func minweightCloneRootList(src []uint32) []uint32 {
+	return append([]uint32(nil), src...)
+}
+
 func (bt *minweightBtree) snapshot() (*minweightSnapshot, error) {
 	s := &minweightSnapshot{}
 	if err := bt.store.Scan(func(item minweight.Item) bool {
@@ -477,6 +483,7 @@ func (bt *minweightBtree) snapshot() (*minweightSnapshot, error) {
 	s.maxPageCount = bt.maxPageCount
 	s.secureDelete = bt.secureDelete
 	s.autoVacuum = bt.autoVacuum
+	s.freeRoots = minweightCloneRootList(bt.freeRoots)
 	bt.mu.Unlock()
 	return s, nil
 }
@@ -501,6 +508,7 @@ func (bt *minweightBtree) restoreSnapshot(s minweightSnapshot) error {
 	bt.maxPageCount = s.maxPageCount
 	bt.secureDelete = s.secureDelete
 	bt.autoVacuum = s.autoVacuum
+	bt.freeRoots = minweightCloneRootList(s.freeRoots)
 	bt.dataVer = dataVer
 	bt.mu.Unlock()
 	return nil
@@ -1474,6 +1482,7 @@ func (e *minweightStorageEngine) BtreeNewDb(ctx BtreeContext, p BtreeHandle) (r 
 	bt.store = minweight.New()
 	bt.tables = map[uint32]minweightTable{1: {intKey: true}}
 	bt.next = 1
+	bt.freeRoots = nil
 	bt.meta = [SQLITE_N_BTREE_META]uint32{}
 	bt.mu.Unlock()
 	return SQLITE_OK
@@ -2186,10 +2195,19 @@ func (e *minweightStorageEngine) BtreeCreateTable(ctx BtreeContext, p BtreeHandl
 		return rc
 	}
 	bt.mu.Lock()
-	bt.next++
-	root := bt.next
+	var root uint32
+	if bt.autoVacuum == BTREE_AUTOVACUUM_NONE && len(bt.freeRoots) != 0 {
+		last := len(bt.freeRoots) - 1
+		root = bt.freeRoots[last]
+		bt.freeRoots = bt.freeRoots[:last]
+	} else {
+		bt.next++
+		root = bt.next
+	}
 	bt.tables[root] = minweightTable{intKey: flags&int32(BTREE_INTKEY) != 0}
-	bt.meta[BTREE_LARGEST_ROOT_PAGE] = root
+	if root > bt.meta[BTREE_LARGEST_ROOT_PAGE] {
+		bt.meta[BTREE_LARGEST_ROOT_PAGE] = root
+	}
 	bt.mu.Unlock()
 	piTable.PutUint32(root)
 	return SQLITE_OK
@@ -2274,6 +2292,8 @@ func (e *minweightStorageEngine) BtreeDropTable(ctx BtreeContext, p BtreeHandle,
 			bt.next = 1
 		}
 		bt.meta[BTREE_LARGEST_ROOT_PAGE] = bt.next
+	} else {
+		bt.freeRoots = append(bt.freeRoots, root)
 	}
 	bt.mu.Unlock()
 	if !piMoved.IsNil() {

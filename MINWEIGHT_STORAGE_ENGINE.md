@@ -48,6 +48,7 @@ Last updated: 2026-06-04.
 - Matched minweight `PRAGMA mmap_size` visible state for path-backed databases by attaching minimal fake-file `xFileControl` support for `SQLITE_FCNTL_MMAP_SIZE`; this records the advisory limit but does not implement real memory mapping.
 - Matched minweight `BtreeSetPagerFlags` fake-pager state by reusing SQLite's generated pager flag logic for sync mode, WAL sync flags, and cache-spill flags; this keeps internal pager metadata aligned without adding real page-file sync behavior.
 - Matched auto-vacuum `DROP TABLE` root-page movement: when SQLite asks to drop a non-largest root, minweight now moves the largest logical root into the gap, reports `piMoved`, and keeps `sqlite_schema.rootpage` plus indexed lookups aligned with native btree.
+- Matched ordinary `DROP TABLE` root reuse: minweight now records freed logical root pages and lets subsequent `BtreeCreateTable` reuse them, keeping `sqlite_schema.rootpage` stable like native btree without modeling the physical freelist pages.
 
 ## Focused Test Policy
 
