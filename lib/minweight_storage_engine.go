@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build darwin || linux
+//go:build (darwin && (amd64 || arm64)) || (linux && (amd64 || arm64 || loong64 || ppc64le || riscv64 || s390x))
 
 package sqlite3
 
@@ -42,6 +42,7 @@ type minweightBtree struct {
 	meta    [SQLITE_N_BTREE_META]uint32
 	tables  map[uint32]minweightTable
 	next    uint32
+	pager   uintptr
 	schema  uintptr
 	dataVer uint32
 }
@@ -197,6 +198,54 @@ func (c *minweightCursor) current() (minweightRow, bool) {
 	return c.rows[c.index], true
 }
 
+func minweightCompareIndexKey(ctx BtreeContext, key []byte, pIdxKey uintptr) (int32, int32) {
+	if len(key) == 0 {
+		return 0, SQLITE_CORRUPT
+	}
+	buf := _sqlite3MallocZero(ctx.tls, uint64(len(key)+18))
+	if buf == 0 {
+		return 0, SQLITE_NOMEM
+	}
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(buf)), len(key)), key)
+	cmp := _sqlite3VdbeRecordCompare(ctx.tls, int32(len(key)), buf, pIdxKey)
+	Xsqlite3_free(ctx.tls, buf)
+	if (*TUnpackedRecord)(unsafe.Pointer(pIdxKey)).FerrCode != uint8(SQLITE_OK) {
+		return cmp, SQLITE_CORRUPT
+	}
+	return cmp, SQLITE_OK
+}
+
+func minweightCompareIndexRows(ctx BtreeContext, keyInfo uintptr, a []byte, b []byte) (int32, int32) {
+	pIdxKey := _sqlite3VdbeAllocUnpackedRecord(ctx.tls, keyInfo)
+	if pIdxKey == 0 {
+		return 0, SQLITE_NOMEM
+	}
+	buf := _sqlite3MallocZero(ctx.tls, uint64(len(b)+18))
+	if buf == 0 {
+		_sqlite3DbFreeNN(ctx.tls, (*TKeyInfo)(unsafe.Pointer(keyInfo)).Fdb, pIdxKey)
+		return 0, SQLITE_NOMEM
+	}
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(buf)), len(b)), b)
+	_sqlite3VdbeRecordUnpack(ctx.tls, int32(len(b)), buf, pIdxKey)
+	Xsqlite3_free(ctx.tls, buf)
+	cmp, rc := minweightCompareIndexKey(ctx, a, pIdxKey)
+	_sqlite3DbFreeNN(ctx.tls, (*TKeyInfo)(unsafe.Pointer(keyInfo)).Fdb, pIdxKey)
+	return cmp, rc
+}
+
+func minweightSortIndexRows(ctx BtreeContext, keyInfo uintptr, rows []minweightRow) int32 {
+	var rc int32
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rc != 0 {
+			return false
+		}
+		var cmp int32
+		cmp, rc = minweightCompareIndexRows(ctx, keyInfo, rows[i].key, rows[j].key)
+		return cmp < 0
+	})
+	return rc
+}
+
 func (e *minweightStorageEngine) BtreeEnter(ctx BtreeContext, p BtreeHandle)                {}
 func (e *minweightStorageEngine) BtreeLeave(ctx BtreeContext, p BtreeHandle)                {}
 func (e *minweightStorageEngine) BtreeEnterAll(ctx BtreeContext, db SQLiteHandle)           {}
@@ -230,7 +279,10 @@ func (e *minweightStorageEngine) BtreeLastPage(ctx BtreeContext, p BtreeHandle) 
 }
 
 func (e *minweightStorageEngine) BtreeOpen(ctx BtreeContext, pVfs BtreeVFSHandle, zFilename BtreeCStringHandle, db SQLiteHandle, ppBtree BtreeMemoryHandle, flags int32, vfsFlags int32) (r int32) {
+	pager := _sqlite3MallocZero(ctx.tls, uint64(unsafe.Sizeof(Pager{})))
+	(*Pager)(unsafe.Pointer(pager)).FpageSize = 4096
 	bt := &minweightBtree{
+		pager:  pager,
 		store:  minweight.New(),
 		tables: map[uint32]minweightTable{1: {intKey: true}},
 		next:   1,
@@ -250,6 +302,9 @@ func (e *minweightStorageEngine) BtreeClose(ctx BtreeContext, p BtreeHandle) (r 
 	e.mu.Unlock()
 	if bt != nil && bt.schema != 0 {
 		Xsqlite3_free(ctx.tls, bt.schema)
+	}
+	if bt != nil && bt.pager != 0 {
+		Xsqlite3_free(ctx.tls, bt.pager)
 	}
 	return SQLITE_OK
 }
@@ -298,6 +353,9 @@ func (e *minweightStorageEngine) BtreeNewDb(ctx BtreeContext, p BtreeHandle) (r 
 }
 
 func (e *minweightStorageEngine) BtreeBeginTrans(ctx BtreeContext, p BtreeHandle, wrflag int32, pSchemaVersion BtreeMemoryHandle) (r int32) {
+	if !pSchemaVersion.IsNil() {
+		pSchemaVersion.PutUint32(e.btree(p).meta[BTREE_SCHEMA_VERSION])
+	}
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeIncrVacuum(ctx BtreeContext, p BtreeHandle) (r int32) {
@@ -510,7 +568,38 @@ func (e *minweightStorageEngine) BtreeTableMoveto(ctx BtreeContext, pCur BtreeCu
 }
 
 func (e *minweightStorageEngine) BtreeIndexMoveto(ctx BtreeContext, pCur BtreeCursorHandle, pIdxKey BtreeIndexKeyHandle, pRes BtreeMemoryHandle) (r int32) {
-	return SQLITE_ERROR
+	cur := e.cursor(pCur)
+	rows, err := cur.btree.loadRows(cur.root, false)
+	if err != nil {
+		return minweightSQLiteError(err)
+	}
+	keyInfo := (*TUnpackedRecord)(unsafe.Pointer(pIdxKey.ptr)).FpKeyInfo
+	if rc := minweightSortIndexRows(ctx, keyInfo, rows); rc != SQLITE_OK {
+		return rc
+	}
+	cur.rows = rows
+	rec := (*TUnpackedRecord)(unsafe.Pointer(pIdxKey.ptr))
+	rec.FerrCode = uint8(SQLITE_OK)
+	rec.FeqSeen = uint8(0)
+	for i, row := range rows {
+		cmp, rc := minweightCompareIndexKey(ctx, row.key, pIdxKey.ptr)
+		if rc != SQLITE_OK {
+			return rc
+		}
+		if cmp == 0 {
+			rec.FeqSeen = uint8(1)
+		}
+		if cmp >= 0 {
+			cur.valid = true
+			cur.index = i
+			minweightWriteResult(pRes, cmp)
+			return SQLITE_OK
+		}
+	}
+	cur.valid = false
+	cur.index = len(rows)
+	minweightWriteResult(pRes, -1)
+	return SQLITE_OK
 }
 
 func (e *minweightStorageEngine) BtreeEof(ctx BtreeContext, pCur BtreeCursorHandle) (r int32) {
@@ -532,11 +621,12 @@ func (e *minweightStorageEngine) BtreeRowCountEst(ctx BtreeContext, pCur BtreeCu
 func (e *minweightStorageEngine) BtreeNext(ctx BtreeContext, pCur BtreeCursorHandle, flags int32) (r int32) {
 	cur := e.cursor(pCur)
 	if !cur.valid {
-		return SQLITE_OK
+		return SQLITE_DONE
 	}
 	cur.index++
 	if cur.index >= len(cur.rows) {
 		cur.valid = false
+		return SQLITE_DONE
 	}
 	return SQLITE_OK
 }
@@ -544,29 +634,29 @@ func (e *minweightStorageEngine) BtreeNext(ctx BtreeContext, pCur BtreeCursorHan
 func (e *minweightStorageEngine) BtreePrevious(ctx BtreeContext, pCur BtreeCursorHandle, flags int32) (r int32) {
 	cur := e.cursor(pCur)
 	if !cur.valid {
-		return SQLITE_OK
+		return SQLITE_DONE
 	}
 	cur.index--
 	if cur.index < 0 {
 		cur.valid = false
+		return SQLITE_DONE
 	}
 	return SQLITE_OK
 }
 
 func (e *minweightStorageEngine) BtreeInsert(ctx BtreeContext, pCur BtreeCursorHandle, pX BtreePayloadHandle, flags int32, seekResult int32) (r int32) {
 	cur := e.cursor(pCur)
-	payload := pX.DataBytes()
-	if zeros := pX.ZeroSize(); zeros > 0 {
-		payload = append(payload, make([]byte, zeros)...)
-	}
 	var key []byte
+	var payload []byte
 	if cur.intKey {
+		payload = pX.DataBytes()
+		if zeros := pX.ZeroSize(); zeros > 0 {
+			payload = append(payload, make([]byte, zeros)...)
+		}
 		key = minweightTableKey(cur.root, pX.KeySize())
 	} else {
-		key = minweightIndexKey(cur.root, pX.KeyBytes())
-		if len(payload) == 0 {
-			payload = pX.KeyBytes()
-		}
+		payload = pX.KeyBytes()
+		key = minweightIndexKey(cur.root, payload)
 	}
 	if err := cur.btree.store.Put(key, payload); err != nil {
 		return minweightSQLiteError(err)
@@ -671,7 +761,7 @@ func (e *minweightStorageEngine) BtreeCount(ctx BtreeContext, db SQLiteHandle, p
 }
 
 func (e *minweightStorageEngine) BtreePager(ctx BtreeContext, p BtreeHandle) (r BtreePagerHandle) {
-	return BtreePagerHandle{}
+	return btreePagerHandle(ctx.tls, e.btree(p).pager)
 }
 func (e *minweightStorageEngine) BtreeGetFilename(ctx BtreeContext, p BtreeHandle) (r BtreeCStringHandle) {
 	return BtreeCStringHandle{}
