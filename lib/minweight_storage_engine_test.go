@@ -116,6 +116,33 @@ func (h *minweightBtreeTestHarness) assertIncrblobExpired(t *testing.T, cursor B
 	}
 }
 
+func (h *minweightBtreeTestHarness) assertCursorFault(t *testing.T, cursor BtreeCursorHandle, faultCode int32) {
+	t.Helper()
+	if got := h.engine.BtreeCursorHasMoved(h.ctx, cursor); got != 1 {
+		t.Fatalf("BtreeCursorHasMoved = %d, want 1", got)
+	}
+	if got := h.engine.BtreeCursorIsValidNN(h.ctx, cursor); got != 0 {
+		t.Fatalf("BtreeCursorIsValidNN = %d, want 0", got)
+	}
+	var differentRow int32
+	if rc := h.engine.BtreeCursorRestore(h.ctx, cursor, BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&differentRow))}); rc != faultCode {
+		t.Fatalf("BtreeCursorRestore rc = %d, want %d", rc, faultCode)
+	}
+	if differentRow != 1 {
+		t.Fatalf("differentRow = %d, want 1", differentRow)
+	}
+	buf := make([]byte, 1)
+	if rc := h.engine.BtreePayloadChecked(h.ctx, cursor, 0, 1, BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&buf[0]))}); rc != faultCode {
+		t.Fatalf("BtreePayloadChecked rc = %d, want %d", rc, faultCode)
+	}
+	if got := (*BtCursor)(unsafe.Pointer(cursor.ptr)).FeState; got != uint8(CURSOR_FAULT) {
+		t.Fatalf("raw cursor state = %d, want CURSOR_FAULT", got)
+	}
+	if got := (*BtCursor)(unsafe.Pointer(cursor.ptr)).FskipNext; got != faultCode {
+		t.Fatalf("raw cursor fault code = %d, want %d", got, faultCode)
+	}
+}
+
 func TestMinweightCursorRestoreRefreshesChangedRow(t *testing.T) {
 	tls := libc.NewTLS()
 	defer tls.Close()
@@ -228,6 +255,42 @@ func TestMinweightIncrblobCursorInvalidatedByClearTable(t *testing.T) {
 	} else if ok {
 		t.Fatal("cleared row still exists")
 	}
+}
+
+func TestMinweightTripAllCursorsHonorsWriteOnly(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	h.putRow(t, 1, []byte("abc"))
+
+	readCursor := h.cursor(t, false)
+	h.moveToRow(t, readCursor, 1)
+	writeCursor := h.cursor(t, true)
+	h.moveToRow(t, writeCursor, 1)
+
+	if rc := h.engine.BtreeTripAllCursors(h.ctx, h.btree, SQLITE_ABORT_ROLLBACK, 1); rc != SQLITE_OK {
+		t.Fatalf("BtreeTripAllCursors rc = %d, want SQLITE_OK", rc)
+	}
+	h.assertCursorFault(t, writeCursor, SQLITE_ABORT_ROLLBACK)
+
+	buf := make([]byte, 3)
+	if rc := h.engine.BtreePayloadChecked(h.ctx, readCursor, 0, 3, BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&buf[0]))}); rc != SQLITE_OK {
+		t.Fatalf("read cursor payload rc = %d, want SQLITE_OK", rc)
+	}
+	if !bytes.Equal(buf, []byte("abc")) {
+		t.Fatalf("read cursor payload = %q, want abc", buf)
+	}
+}
+
+func TestMinweightRollbackTripsCursors(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	h.putRow(t, 1, []byte("abc"))
+
+	cursor := h.cursor(t, false)
+	h.moveToRow(t, cursor, 1)
+
+	if rc := h.engine.BtreeRollback(h.ctx, h.btree, SQLITE_ABORT, 0); rc != SQLITE_OK {
+		t.Fatalf("BtreeRollback rc = %d, want SQLITE_OK", rc)
+	}
+	h.assertCursorFault(t, cursor, SQLITE_ABORT)
 }
 
 func TestMinweightIntegrityCheckReportsLogicalCorruption(t *testing.T) {

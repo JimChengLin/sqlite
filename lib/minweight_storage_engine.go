@@ -97,6 +97,7 @@ type minweightCursor struct {
 	writable        bool
 	incrblob        bool
 	incrblobInvalid bool
+	faultCode       int32
 	dataVer         uint32
 	lastRow         minweightRow
 	hasLastRow      bool
@@ -831,6 +832,27 @@ func (e *minweightStorageEngine) invalidateIncrblobCursors(bt *minweightBtree, r
 	}
 }
 
+func (e *minweightStorageEngine) tripCursors(ctx BtreeContext, bt *minweightBtree, errCode int32, writeOnly int32) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for ptr, cur := range e.cursors {
+		if cur.btree != bt {
+			continue
+		}
+		if writeOnly != 0 && !cur.writable {
+			continue
+		}
+		cur.closePayload(ctx)
+		cur.valid = false
+		cur.hasLastRow = false
+		cur.incrblobInvalid = false
+		cur.faultCode = errCode
+		raw := (*BtCursor)(unsafe.Pointer(ptr))
+		raw.FeState = uint8(CURSOR_FAULT)
+		raw.FskipNext = errCode
+	}
+}
+
 func (e *minweightStorageEngine) BtreeEnter(ctx BtreeContext, p BtreeHandle)                {}
 func (e *minweightStorageEngine) BtreeLeave(ctx BtreeContext, p BtreeHandle)                {}
 func (e *minweightStorageEngine) BtreeEnterAll(ctx BtreeContext, db SQLiteHandle)           {}
@@ -848,6 +870,9 @@ func (e *minweightStorageEngine) BtreeCursorHasMoved(ctx BtreeContext, pCur Btre
 		return 0
 	}
 	cur := e.cursor(pCur)
+	if cur.faultCode != SQLITE_OK {
+		return 1
+	}
 	if cur.incrblobInvalid {
 		return 1
 	}
@@ -868,6 +893,10 @@ func (e *minweightStorageEngine) BtreeCursorRestore(ctx BtreeContext, pCur Btree
 	}
 	cur := e.cursor(pCur)
 	differentRow := int32(0)
+	if cur.faultCode != SQLITE_OK {
+		minweightWriteResult(pDifferentRow, 1)
+		return cur.faultCode
+	}
 	if cur.incrblobInvalid {
 		minweightWriteResult(pDifferentRow, 1)
 		return SQLITE_OK
@@ -1219,6 +1248,10 @@ func (e *minweightStorageEngine) BtreeCommit(ctx BtreeContext, p BtreeHandle) (r
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeTripAllCursors(ctx BtreeContext, pBtree BtreeHandle, errCode int32, writeOnly int32) (r int32) {
+	if pBtree.IsNil() {
+		return SQLITE_OK
+	}
+	e.tripCursors(ctx, e.btree(pBtree), errCode, writeOnly)
 	return SQLITE_OK
 }
 func (e *minweightStorageEngine) BtreeRollback(ctx BtreeContext, p BtreeHandle, tripCode int32, writeOnly int32) (r int32) {
@@ -1233,6 +1266,9 @@ func (e *minweightStorageEngine) BtreeRollback(ctx BtreeContext, p BtreeHandle, 
 		if err := bt.restoreSnapshot(*s); err != nil {
 			return minweightSQLiteError(err)
 		}
+	}
+	if tripCode != SQLITE_OK {
+		e.tripCursors(ctx, bt, tripCode, writeOnly)
 	}
 	bt.releaseTrans()
 	return SQLITE_OK
@@ -1312,6 +1348,9 @@ func (e *minweightStorageEngine) BtreeCursor(ctx BtreeContext, p BtreeHandle, iT
 	(*BtCursor)(unsafe.Pointer(pCur.ptr)).FcurIntKey = libc.Uint8FromInt32(libc.BoolInt32(table.intKey))
 	(*BtCursor)(unsafe.Pointer(pCur.ptr)).FpKeyInfo = pKeyInfo.ptr
 	(*BtCursor)(unsafe.Pointer(pCur.ptr)).FiPage = -1
+	if wrFlag != 0 {
+		(*BtCursor)(unsafe.Pointer(pCur.ptr)).FcurFlags |= uint8(BTCF_WriteFlag)
+	}
 	cur := &minweightCursor{
 		btree:    bt,
 		root:     iTable,
@@ -1346,7 +1385,7 @@ func (e *minweightStorageEngine) BtreeCloseCursor(ctx BtreeContext, pCur BtreeCu
 
 func (e *minweightStorageEngine) BtreeCursorIsValidNN(ctx BtreeContext, pCur BtreeCursorHandle) (r int32) {
 	cur := e.cursor(pCur)
-	if cur.valid {
+	if cur.faultCode == SQLITE_OK && cur.valid {
 		return 1
 	}
 	return 0
@@ -1382,12 +1421,16 @@ func (e *minweightStorageEngine) BtreeMaxRecordSize(ctx BtreeContext, pCur Btree
 }
 
 func (e *minweightStorageEngine) BtreePayload(ctx BtreeContext, pCur BtreeCursorHandle, offset uint32, amt uint32, pBuf BtreeMemoryHandle) (r int32) {
-	row, ok := e.cursor(pCur).current()
+	cur := e.cursor(pCur)
+	if cur.faultCode != SQLITE_OK {
+		return cur.faultCode
+	}
+	row, ok := cur.current()
 	if !ok {
 		return SQLITE_ERROR
 	}
 	data := row.payload
-	if !e.cursor(pCur).intKey {
+	if !cur.intKey {
 		data = row.key
 	}
 	end := int(offset + amt)
@@ -1399,7 +1442,11 @@ func (e *minweightStorageEngine) BtreePayload(ctx BtreeContext, pCur BtreeCursor
 }
 
 func (e *minweightStorageEngine) BtreePayloadChecked(ctx BtreeContext, pCur BtreeCursorHandle, offset uint32, amt uint32, pBuf BtreeMemoryHandle) (r int32) {
-	if e.cursor(pCur).incrblobInvalid {
+	cur := e.cursor(pCur)
+	if cur.faultCode != SQLITE_OK {
+		return cur.faultCode
+	}
+	if cur.incrblobInvalid {
 		return SQLITE_ABORT
 	}
 	return e.BtreePayload(ctx, pCur, offset, amt, pBuf)
@@ -1407,6 +1454,10 @@ func (e *minweightStorageEngine) BtreePayloadChecked(ctx BtreeContext, pCur Btre
 
 func (e *minweightStorageEngine) BtreePayloadFetch(ctx BtreeContext, pCur BtreeCursorHandle, pAmt BtreeMemoryHandle) (r BtreeMemoryHandle) {
 	cur := e.cursor(pCur)
+	if cur.faultCode != SQLITE_OK {
+		pAmt.PutInt32(0)
+		return BtreeMemoryHandle{}
+	}
 	row, ok := cur.current()
 	if !ok {
 		pAmt.PutInt32(0)
@@ -1427,6 +1478,9 @@ func (e *minweightStorageEngine) BtreePayloadFetch(ctx BtreeContext, pCur BtreeC
 
 func (e *minweightStorageEngine) BtreeFirst(ctx BtreeContext, pCur BtreeCursorHandle, pRes BtreeMemoryHandle) (r int32) {
 	cur := e.cursor(pCur)
+	if cur.faultCode != SQLITE_OK {
+		return cur.faultCode
+	}
 	if rc := e.refreshCursorRows(ctx, pCur, cur); rc != SQLITE_OK {
 		return rc
 	}
@@ -1446,6 +1500,9 @@ func (e *minweightStorageEngine) BtreeFirst(ctx BtreeContext, pCur BtreeCursorHa
 
 func (e *minweightStorageEngine) BtreeLast(ctx BtreeContext, pCur BtreeCursorHandle, pRes BtreeMemoryHandle) (r int32) {
 	cur := e.cursor(pCur)
+	if cur.faultCode != SQLITE_OK {
+		return cur.faultCode
+	}
 	cur.btree.mu.Lock()
 	table := cur.btree.tables[cur.root]
 	cur.btree.mu.Unlock()
@@ -1490,6 +1547,9 @@ func (e *minweightStorageEngine) BtreeLast(ctx BtreeContext, pCur BtreeCursorHan
 
 func (e *minweightStorageEngine) BtreeTableMoveto(ctx BtreeContext, pCur BtreeCursorHandle, intKey int64, biasRight int32, pRes BtreeMemoryHandle) (r int32) {
 	cur := e.cursor(pCur)
+	if cur.faultCode != SQLITE_OK {
+		return cur.faultCode
+	}
 	rows, err := cur.btree.loadRows(cur.root, true)
 	if err != nil {
 		return minweightSQLiteError(err)
@@ -1517,6 +1577,9 @@ func (e *minweightStorageEngine) BtreeTableMoveto(ctx BtreeContext, pCur BtreeCu
 
 func (e *minweightStorageEngine) BtreeIndexMoveto(ctx BtreeContext, pCur BtreeCursorHandle, pIdxKey BtreeIndexKeyHandle, pRes BtreeMemoryHandle) (r int32) {
 	cur := e.cursor(pCur)
+	if cur.faultCode != SQLITE_OK {
+		return cur.faultCode
+	}
 	keyInfo := (*TUnpackedRecord)(unsafe.Pointer(pIdxKey.ptr)).FpKeyInfo
 	if rc := e.refreshCursorRows(ctx, pCur, cur); rc != SQLITE_OK {
 		return rc
@@ -1596,6 +1659,9 @@ func (e *minweightStorageEngine) BtreeRowCountEst(ctx BtreeContext, pCur BtreeCu
 
 func (e *minweightStorageEngine) BtreeNext(ctx BtreeContext, pCur BtreeCursorHandle, flags int32) (r int32) {
 	cur := e.cursor(pCur)
+	if cur.faultCode != SQLITE_OK {
+		return cur.faultCode
+	}
 	if !cur.valid {
 		if cur.hasLastRow {
 			if cur.dataVer != cur.btree.dataVer {
@@ -1659,6 +1725,9 @@ func (e *minweightStorageEngine) BtreeNext(ctx BtreeContext, pCur BtreeCursorHan
 
 func (e *minweightStorageEngine) BtreePrevious(ctx BtreeContext, pCur BtreeCursorHandle, flags int32) (r int32) {
 	cur := e.cursor(pCur)
+	if cur.faultCode != SQLITE_OK {
+		return cur.faultCode
+	}
 	if !cur.valid {
 		if cur.hasLastRow {
 			if cur.dataVer != cur.btree.dataVer {
@@ -1724,6 +1793,9 @@ func (e *minweightStorageEngine) BtreeInsert(ctx BtreeContext, pCur BtreeCursorH
 	if rc := cur.btree.ensureWritable(); rc != SQLITE_OK {
 		return rc
 	}
+	if cur.faultCode != SQLITE_OK {
+		return cur.faultCode
+	}
 	var key []byte
 	var payload []byte
 	var rowid int64
@@ -1773,7 +1845,13 @@ func (e *minweightStorageEngine) BtreeTransferRow(ctx BtreeContext, pDest BtreeC
 	if rc := dest.btree.ensureWritable(); rc != SQLITE_OK {
 		return rc
 	}
+	if dest.faultCode != SQLITE_OK {
+		return dest.faultCode
+	}
 	src := e.cursor(pSrc)
+	if src.faultCode != SQLITE_OK {
+		return src.faultCode
+	}
 	if dest.intKey != src.intKey {
 		return SQLITE_CORRUPT
 	}
@@ -1797,6 +1875,9 @@ func (e *minweightStorageEngine) BtreeDelete(ctx BtreeContext, pCur BtreeCursorH
 	cur := e.cursor(pCur)
 	if rc := cur.btree.ensureWritable(); rc != SQLITE_OK {
 		return rc
+	}
+	if cur.faultCode != SQLITE_OK {
+		return cur.faultCode
 	}
 	row, ok := cur.current()
 	if !ok {
@@ -1863,6 +1944,9 @@ func (e *minweightStorageEngine) BtreeClearTableOfCursor(ctx BtreeContext, pCur 
 	cur := e.cursor(pCur)
 	if rc := cur.btree.ensureWritable(); rc != SQLITE_OK {
 		return rc
+	}
+	if cur.faultCode != SQLITE_OK {
+		return cur.faultCode
 	}
 	if cur.intKey {
 		e.invalidateIncrblobCursors(cur.btree, cur.root, 0, true)
@@ -1988,6 +2072,9 @@ func (e *minweightStorageEngine) BtreePutData(ctx BtreeContext, pCsr BtreeCursor
 	cur := e.cursor(pCsr)
 	if rc := cur.btree.ensureWritable(); rc != SQLITE_OK {
 		return rc
+	}
+	if cur.faultCode != SQLITE_OK {
+		return cur.faultCode
 	}
 	if cur.incrblobInvalid {
 		return SQLITE_ABORT
