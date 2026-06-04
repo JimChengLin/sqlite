@@ -190,7 +190,7 @@ minweight_store 未来可以提供长期 iterator；如果有长期 iterator，a
 
 如果另一个 handle 正在写事务中，非 writer handle 的 cursor、row-count、meta 等读路径不应该看见 writer overlay。当前代码仍有 transaction-start snapshot 兼容残留，用来挡住未提交写；这能覆盖基本 committed-view 可见性，但方向不对。
 
-正确方向是 statement/read-cursor pin 一个 committed generation，writer commit 后旧 generation 只在仍有 reader pin 时留在内存里。这样读路径按 key/range 查自己的 pinned view，不复制整库，也不遍历 snapshot items。`snapshot()`、`minweightSnapshotGet()` 这类 `O(DB)` 读放大路径要从普通事务隔离里删掉，只保留给 logical backup/serialize 这类本来就需要全量逻辑快照的功能。
+正确方向是 statement/read-cursor pin 一个 committed generation，writer commit 后旧 generation 只在仍有 reader pin 时留在内存里。这样读路径按 key/range 查自己的 pinned view，不复制整库，也不遍历 snapshot items。历史 `snapshot()` / `minweightSnapshotGet()` 这类 `O(DB)` 读放大 helper 已经从普通 cursor/check 路径删除；剩余 transaction-start read-view 兼容还要继续迁到 generation pin，只保留 logical backup/serialize 这类本来就需要全量逻辑快照的功能。
 
 ## 写路径
 
@@ -231,7 +231,7 @@ shared-cache 锁：
 
 - 显式长读事务还没有稳定 read view；在上面的 generation pin 模型落地前，不支持长事务。
 - raw index key 旧格式已经不支持；open/stat recompute 和 integrity check 会把它视为 corrupt，而不是隐藏地 materialize。
-- 剩余整库/整 root 扫描主要在 snapshot、integrity/check 和替换 whole-btree 的 copy 类路径；正常 cursor movement 不再 materialize root rows。
+- 剩余整库/整 root 扫描主要在 transaction-start read snapshot 和替换 whole-btree 的 copy 类路径；`BtreeIntegrityCheck` 已经改成 streaming full scan 或 selected-root range scan，正常 cursor movement 不再 materialize root rows。
 - WAL 只能等 stable read view 后做逻辑事务模式，不能假装有 SQLite WAL frame。
 
 因此下一步不是补 pager/VFS/dbpage shim，而是把 read/write set validation、in-memory generation pin 和剩余 whole-root rewrite 补上。
@@ -389,6 +389,6 @@ TEST_PARALLEL=8 ./test-storage-engine.sh
 
 目前已经完成的是：SQLite btree API 可以 dispatch 到 minweight，handle 绑定不再依赖进程级全局开关，path-backed database 会真实打开 minweight_store 目录并在最后一个 handle 关闭时 `Store.Close()`，逻辑 metadata 也会随 store 持久化；competing writer 和 open statement reader 会让 writer 返回 `SQLITE_BUSY`，busy handler 可等待 active writer 释放，不会覆盖 active writer 或漏出失败 commit 的写集；index/WITHOUT ROWID 新写入已经使用 versioned `sqliteComparableKey` 物理 key，value 保留原始 SQLite record；non-int-key sequential cursor movement 和 versioned-root `BtreeIndexMoveto` 已经用 seek/range API。
 
-目前没有完成的是：byte-range read set 和 SQL 生命周期级 generation pin、完整 reader/writer lock protocol、剩余 root-scoped copy/check 流程的 range/batch 维护、物理 page file、真实 WAL、mmap、writable VFS，以及完整 `sqlite_dbpage` 页面模型。
+目前没有完成的是：byte-range read set 和 SQL 生命周期级 generation pin、完整 reader/writer lock protocol、剩余 root-scoped copy 流程的 range/batch 维护、物理 page file、真实 WAL、mmap、writable VFS，以及完整 `sqlite_dbpage` 页面模型。
 
-下一步如果目标是“行为对齐 btree”，第一优先级转为 optimistic transaction view 和剩余 root-scoped fallback：versioned 新写入路径已经能 seek，raw key 旧格式已经 fail fast，正常 cursor movement 已经没有 `loadRows()` / `refreshCursorRows()`，`BtreeCopyFile` 已经用 batch/overlay 替代 snapshot/restore，剩下要把剩余 snapshot 隔离改成 generation pin + read/write set validation，并继续把 check 类路径换成 range/batch。
+下一步如果目标是“行为对齐 btree”，第一优先级转为 optimistic transaction view 和剩余 root-scoped fallback：versioned 新写入路径已经能 seek，raw key 旧格式已经 fail fast，正常 cursor movement 已经没有 `loadRows()` / `refreshCursorRows()`，`BtreeIntegrityCheck` 已经不再复制整库 snapshot，`BtreeCopyFile` 已经用 batch/overlay 替代 snapshot/restore，剩下要把剩余 snapshot 隔离改成 generation pin + read/write set validation。

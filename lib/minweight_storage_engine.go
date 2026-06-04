@@ -152,29 +152,6 @@ type minweightRow struct {
 	payload  []byte
 }
 
-type minweightSnapshot struct {
-	items         []minweightSnapshotItem
-	meta          [SQLITE_N_BTREE_META]uint32
-	tables        map[uint32]minweightTable
-	next          uint32
-	dataVer       uint32
-	pageSize      int32
-	reserve       int32
-	reserveWanted int32
-	pageSizeFixed bool
-	maxPageCount  uint32
-	secureDelete  int32
-	autoVacuum    int32
-	cacheSize     int32
-	spillSize     int32
-	freeRoots     []uint32
-}
-
-type minweightSnapshotItem struct {
-	key   []byte
-	value []byte
-}
-
 type minweightDBState struct {
 	meta          [SQLITE_N_BTREE_META]uint32
 	tables        map[uint32]minweightTable
@@ -228,12 +205,6 @@ type minweightCommittedKeyChange struct {
 	beforeExist bool
 	after       []byte
 	afterExists bool
-}
-
-type minweightIntegrityStats struct {
-	rowCount int64
-	minRowid int64
-	maxRowid int64
 }
 
 func (e *minweightStorageEngine) nextToken() uintptr {
@@ -767,73 +738,6 @@ func minweightAllocCString(ctx BtreeContext, s string) uintptr {
 	copy(buf, s)
 	buf[len(s)] = 0
 	return p
-}
-
-func minweightIntegrityRoots(aRoot BtreeMemoryHandle, nRoot int32) ([]uint32, bool) {
-	if aRoot.IsNil() || nRoot <= 0 {
-		return nil, false
-	}
-	roots := make([]uint32, nRoot)
-	rootBytes := aRoot.ReadBytes(int(nRoot) * 4)
-	for i := range roots {
-		roots[i] = binary.NativeEndian.Uint32(rootBytes[i*4 : i*4+4])
-	}
-	return roots, roots[0] == 0
-}
-
-func minweightIntegritySelectedRoots(roots []uint32, partial bool) map[uint32]bool {
-	if len(roots) == 0 {
-		return nil
-	}
-	selected := make(map[uint32]bool, len(roots))
-	start := 0
-	if partial {
-		start = 1
-	}
-	for _, root := range roots[start:] {
-		if root != 0 {
-			selected[root] = true
-		}
-	}
-	return selected
-}
-
-func minweightIntegrityRootChecked(root uint32, partial bool, selected map[uint32]bool) bool {
-	if !partial {
-		return true
-	}
-	return selected[root]
-}
-
-func minweightAddIntegrityError(errors *[]string, mxErr int32, format string, args ...any) bool {
-	if mxErr <= 0 || int32(len(*errors)) >= mxErr {
-		return false
-	}
-	*errors = append(*errors, fmt.Sprintf(format, args...))
-	return int32(len(*errors)) < mxErr
-}
-
-func minweightAddIntegrityRowid(stats map[uint32]minweightIntegrityStats, root uint32, rowid int64) {
-	stat := stats[root]
-	if stat.rowCount == 0 {
-		stat.minRowid = rowid
-		stat.maxRowid = rowid
-	} else {
-		if rowid < stat.minRowid {
-			stat.minRowid = rowid
-		}
-		if rowid > stat.maxRowid {
-			stat.maxRowid = rowid
-		}
-	}
-	stat.rowCount++
-	stats[root] = stat
-}
-
-func minweightAddIntegrityIndexRow(stats map[uint32]minweightIntegrityStats, root uint32) {
-	stat := stats[root]
-	stat.rowCount++
-	stats[root] = stat
 }
 
 func minweightTableKey(root uint32, rowid int64) []byte {
@@ -1635,58 +1539,6 @@ func (bt *minweightBtree) delete(key []byte) (bool, error) {
 	}
 	bt.mu.Unlock()
 	return bt.store.Delete(key)
-}
-
-func (bt *minweightBtree) snapshot() (*minweightSnapshot, error) {
-	s := &minweightSnapshot{}
-	writes := bt.txnWritesSnapshot()
-	items := map[string]minweightSnapshotItem{}
-	if err := bt.store.Scan(func(item minweight.Item) bool {
-		items[string(item.Key)] = minweightSnapshotItem{
-			key:   append([]byte(nil), item.Key...),
-			value: append([]byte(nil), item.Value...),
-		}
-		return true
-	}); err != nil {
-		return nil, err
-	}
-	for _, write := range writes {
-		key := string(write.key)
-		if write.deleted {
-			delete(items, key)
-			continue
-		}
-		items[key] = minweightSnapshotItem{
-			key:   append([]byte(nil), write.key...),
-			value: append([]byte(nil), write.value...),
-		}
-	}
-	keys := make([]string, 0, len(items))
-	for key := range items {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		s.items = append(s.items, items[key])
-	}
-	bt.mu.Lock()
-	state := bt.visibleStateLocked()
-	s.meta = state.meta
-	s.tables = minweightCloneTables(state.tables)
-	s.next = state.next
-	s.dataVer = state.dataVer
-	s.pageSize = state.pageSize
-	s.reserve = state.reserve
-	s.reserveWanted = state.reserveWanted
-	s.pageSizeFixed = state.pageSizeFixed
-	s.maxPageCount = state.maxPageCount
-	s.secureDelete = state.secureDelete
-	s.autoVacuum = state.autoVacuum
-	s.cacheSize = state.cacheSize
-	s.spillSize = state.spillSize
-	s.freeRoots = minweightCloneRootList(state.freeRoots)
-	bt.mu.Unlock()
-	return s, nil
 }
 
 func (bt *minweightBtree) visibleDataVer() uint32 {
@@ -4412,170 +4264,6 @@ func (e *minweightStorageEngine) BtreeIsEmpty(ctx BtreeContext, pCur BtreeCursor
 		pRes.PutInt32(1)
 	} else {
 		pRes.PutInt32(0)
-	}
-	return SQLITE_OK
-}
-
-func (e *minweightStorageEngine) BtreeIntegrityCheck(ctx BtreeContext, db SQLiteHandle, p BtreeHandle, aRoot BtreeMemoryHandle, aCnt BtreeMemoryHandle, nRoot int32, mxErr int32, pnErr BtreeMemoryHandle, pzOut BtreeMemoryHandle) (r int32) {
-	if !pnErr.IsNil() {
-		pnErr.PutInt32(0)
-	}
-	if !pzOut.IsNil() {
-		pzOut.PutUintptr(0)
-	}
-	if mxErr <= 0 {
-		return SQLITE_OK
-	}
-	bt := e.btree(p)
-	snapshot, err := bt.snapshot()
-	if err != nil {
-		return minweightSQLiteError(err)
-	}
-	roots, partial := minweightIntegrityRoots(aRoot, nRoot)
-	selected := minweightIntegritySelectedRoots(roots, partial)
-	stats := make(map[uint32]minweightIntegrityStats, len(snapshot.tables))
-	var errors []string
-scanItems:
-	for _, item := range snapshot.items {
-		if len(item.key) == 0 {
-			if !partial && !minweightAddIntegrityError(&errors, mxErr, "minweight malformed empty key") {
-				break scanItems
-			}
-			continue
-		}
-		switch item.key[0] {
-		case minweightTablePrefix:
-			if len(item.key) != 13 {
-				if !partial && !minweightAddIntegrityError(&errors, mxErr, "minweight malformed table key length %d", len(item.key)) {
-					break scanItems
-				}
-				continue
-			}
-			root := binary.BigEndian.Uint32(item.key[1:5])
-			if !minweightIntegrityRootChecked(root, partial, selected) {
-				continue
-			}
-			table, ok := snapshot.tables[root]
-			if !ok {
-				if !minweightAddIntegrityError(&errors, mxErr, "minweight table key references unknown root %d", root) {
-					break scanItems
-				}
-				continue
-			}
-			if !table.intKey {
-				if !minweightAddIntegrityError(&errors, mxErr, "minweight root %d has table key in index btree", root) {
-					break scanItems
-				}
-				continue
-			}
-			u := binary.BigEndian.Uint64(item.key[5:13]) ^ (1 << 63)
-			minweightAddIntegrityRowid(stats, root, int64(u))
-		case minweightIndexPrefix:
-			if len(item.key) < 5 {
-				if !partial && !minweightAddIntegrityError(&errors, mxErr, "minweight malformed index key length %d", len(item.key)) {
-					break scanItems
-				}
-				continue
-			}
-			root := binary.BigEndian.Uint32(item.key[1:5])
-			if !minweightIndexKeyInVersionedRange(root, item.key) {
-				if !partial && !minweightAddIntegrityError(&errors, mxErr, "minweight unsupported raw index key in root %d", root) {
-					break scanItems
-				}
-				continue
-			}
-			if !minweightIntegrityRootChecked(root, partial, selected) {
-				continue
-			}
-			table, ok := snapshot.tables[root]
-			if !ok {
-				if !minweightAddIntegrityError(&errors, mxErr, "minweight index key references unknown root %d", root) {
-					break scanItems
-				}
-				continue
-			}
-			if table.intKey {
-				if !minweightAddIntegrityError(&errors, mxErr, "minweight root %d has index key in table btree", root) {
-					break scanItems
-				}
-				continue
-			}
-			minweightAddIntegrityIndexRow(stats, root)
-		default:
-			if !partial && !minweightAddIntegrityError(&errors, mxErr, "minweight unknown key prefix 0x%02x", item.key[0]) {
-				break scanItems
-			}
-		}
-		if int32(len(errors)) >= mxErr {
-			break scanItems
-		}
-	}
-	for root, table := range snapshot.tables {
-		if int32(len(errors)) >= mxErr {
-			break
-		}
-		if !minweightIntegrityRootChecked(root, partial, selected) {
-			continue
-		}
-		stat := stats[root]
-		if root == 0 {
-			if !minweightAddIntegrityError(&errors, mxErr, "minweight metadata contains root 0") {
-				break
-			}
-		}
-		if root > snapshot.next {
-			if !minweightAddIntegrityError(&errors, mxErr, "minweight root %d is greater than largest root %d", root, snapshot.next) {
-				break
-			}
-		}
-		if table.rowCount < 0 {
-			if !minweightAddIntegrityError(&errors, mxErr, "minweight root %d has negative row count %d", root, table.rowCount) {
-				break
-			}
-		}
-		if table.rowCount != stat.rowCount {
-			if !minweightAddIntegrityError(&errors, mxErr, "minweight root %d row count metadata %d != actual %d", root, table.rowCount, stat.rowCount) {
-				break
-			}
-		}
-		if !table.intKey {
-			continue
-		}
-		if stat.rowCount == 0 {
-			if table.minRowid != 0 || table.maxRowid != 0 {
-				if !minweightAddIntegrityError(&errors, mxErr, "minweight root %d empty table has rowid bounds %d..%d", root, table.minRowid, table.maxRowid) {
-					break
-				}
-			}
-			continue
-		}
-		if table.minRowid != stat.minRowid || table.maxRowid != stat.maxRowid {
-			if !minweightAddIntegrityError(&errors, mxErr, "minweight root %d rowid bounds metadata %d..%d != actual %d..%d", root, table.minRowid, table.maxRowid, stat.minRowid, stat.maxRowid) {
-				break
-			}
-		}
-	}
-	if !aCnt.IsNil() {
-		for i, root := range roots {
-			var rowCount int64
-			if root != 0 {
-				rowCount = stats[root].rowCount
-			}
-			_sqlite3MemSetArrayInt64(ctx.tls, aCnt.ptr, int32(i), Ti64(rowCount))
-		}
-	}
-	if len(errors) == 0 {
-		return SQLITE_OK
-	}
-	if !pnErr.IsNil() {
-		pnErr.PutInt32(int32(len(errors)))
-	}
-	if !pzOut.IsNil() {
-		out := minweightAllocCString(ctx, strings.Join(errors, "\n"))
-		if out == 0 {
-			return SQLITE_NOMEM
-		}
-		pzOut.PutUintptr(out)
 	}
 	return SQLITE_OK
 }
