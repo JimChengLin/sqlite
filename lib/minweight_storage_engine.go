@@ -1040,7 +1040,11 @@ func minweightComparableFieldKey(ctx BtreeContext, keyInfo uintptr, fieldIndex i
 func minweightComparableMemKey(ctx BtreeContext, keyInfo uintptr, fieldIndex int, pMem uintptr) ([]byte, error) {
 	mem := minweightMemFromPointer(pMem)
 	flags := int(mem.Fflags)
-	out := make([]byte, 0, int(mem.Fn)+16)
+	capacity := 16
+	if mem.Fn > 0 {
+		capacity += int(mem.Fn)
+	}
+	out := make([]byte, 0, capacity)
 	if flags&MEM_Null != 0 {
 		return append(out, 0x10), nil
 	}

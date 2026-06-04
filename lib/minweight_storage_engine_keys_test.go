@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"testing"
+	"unsafe"
 
 	minweight "github.com/JimChengLin/minweight_store"
 	"modernc.org/libc"
@@ -51,6 +52,22 @@ func TestMinweightIndexStoreKeyWithoutKeyInfoUsesVersionedKey(t *testing.T) {
 	row := minweightDecodeRow(minweight.Item{Key: key, Value: record}, false)
 	if !bytes.Equal(row.key, record) || !bytes.Equal(row.payload, record) {
 		t.Fatalf("decoded logical key/payload = %x/%x, want %x", row.key, row.payload, record)
+	}
+}
+
+func TestMinweightComparableMemKeyIgnoresNegativeLengthForInteger(t *testing.T) {
+	var mem TMem
+	*(*int64)(unsafe.Pointer(&mem)) = 42
+	mem.Fflags = uint16(MEM_Int)
+	mem.Fn = -1
+
+	key, err := minweightComparableMemKey(BtreeContext{}, 0, 0, uintptr(unsafe.Pointer(&mem)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := minweightAppendNumberKey(nil, false, 42, 0)
+	if !bytes.Equal(key, want) {
+		t.Fatalf("integer mem key = %x, want %x", key, want)
 	}
 }
 

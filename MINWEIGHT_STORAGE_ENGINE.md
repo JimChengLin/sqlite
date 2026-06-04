@@ -43,6 +43,7 @@ Last updated: 2026-06-04.
 - Added statement reader tracking for minweight read cursors. An open read-only `BtreeCursor` now pins the current committed generation before reading root metadata and releases it at `BtreeCloseCursor`; ordinary autocommit `SELECT` rows can keep reading that old view while a concurrent writer commits, while explicit long read transactions still block writer commit with `SQLITE_BUSY`.
 - Replaced direct writes to the committed minweight store with a transaction overlay. `BtreeInsert`/`BtreeDelete`/clear/drop/root metadata changes now write a per-writer delta plus working metadata, and `BtreeCommitPhaseTwo` publishes the delta with one `minweight.Store.WriteBatch`.
 - Removed write-transaction whole-store snapshots from rollback, savepoint rollback, and statement rollback paths. Those paths now discard or restore the overlay and working metadata instead of scanning and replaying the entire KV store; path-backed rollback/reopen coverage verifies rolled-back rows, indexes, and `PRAGMA user_version` do not persist.
+- Fixed `BtreeIndexMoveto` probe-key generation for SQLite `TMem` values whose `Fn` is negative but irrelevant for the active storage class, such as INTEGER. The adapter now sizes scratch buffers only from positive lengths, so WITHOUT ROWID composite-key seeks cannot panic while encoding integer probe fields.
 - Moved int-key table cursor positioning off whole-root materialization. `BtreeFirst`/`BtreeLast`/`BtreeTableMoveto`/`BtreeNext`/`BtreePrevious` now use minweight `SeekGE`/`SeekLE` plus the current transaction overlay, with coverage for large rowid gaps and overlay insert/delete/update visibility.
 - Added versioned physical index keys. New index/WITHOUT ROWID entries use `i || root || 0x00 || sqliteComparableKey` while preserving the original SQLite record bytes as value/payload; deletes, root moves, clears, and row transfer now track the actual store key instead of recomputing a raw-record key.
 - Added direct sortable-key adapter coverage for storage-class ordering, numeric encoding, `BINARY`/`NOCASE`/`RTRIM`, DESC, versioned key decode, and unsupported custom collation fail-fast.
@@ -115,16 +116,16 @@ Latest focused minweight run: passed on 2026-06-04 with `TEST_PARALLEL=8`, inclu
 This focused list includes `TestMinweightStorageEngineIntegrityCheck`, `TestMinweightStorageEngineJournalModeWALStaysRollback`, direct `./lib` minweight integrity/cursor/index-probe tests, and storage-engine binding cleanup coverage.
 It prioritizes real SQL/storage semantics such as `ATTACH`, `WITHOUT ROWID`, multi-connection committed visibility, rollback/savepoint behavior, backup/serialize logical round-trips, index lookup/order behavior, blob invalidation, and shared-lock behavior.
 The script runs minweight adapter-specific tests and generic top-level SQL behavior tests in separate `go test` processes. This keeps failures easier to attribute; stale sqlite3* reuse is covered by connection-close binding cleanup rather than by relying on process splitting.
-It does not include the low-priority `sqlite_dbpage` and custom-VFS snapshot shims; broad/full minweight runs still cover those.
+It does not include the low-priority `sqlite_dbpage` and custom-VFS snapshot shims; broad/full minweight runs still cover `sqlite_dbpage`, while `TestVFS` remains skipped until minweight has real VFS I/O semantics.
 It also excludes native SQLite file-open/read-only tests such as `TestIssue97`, `TestIsReadOnly`, and `TestOpenV2FailureErrorMessage` because path-backed minweight filenames are store directories and read-only path opens currently fail fast instead of emulating SQLite page-file readonly behavior.
 
-Broad top-level minweight check without the two context-expiration stress subtests:
+Broad top-level minweight check without context-expiration stress tests and native physical-file/VFS tests:
 
 ```sh
 ./test-minweight-broad.sh
 ```
 
-Latest broad run: 94.366s on 2026-06-04 with `-p 8 -parallel 8`. Run this after non-interrupt engine behavior changes when the full context stress coverage is not the point. The broad script skips only `TestRegisteredFunctions/QueryContext_with_context_expiring` and `TestRegisteredFunctions/ExecContext_with_context_expiring`.
+Latest broad run: 493.597s on 2026-06-04 with `TEST_PARALLEL=8`. It skips `TestRegisteredFunctions/QueryContext_with_context_expiring`, `TestRegisteredFunctions/ExecContext_with_context_expiring`, `TestIssue97`, `TestOpenV2FailureErrorMessage`, `TestVFS`, and `TestIsReadOnly`. Run this after non-interrupt engine behavior changes when the full context stress coverage and native physical-file/VFS behavior are not the point.
 
 Full top-level minweight check, run after broad engine semantics changes, context-interrupt changes, or before larger milestones:
 
@@ -152,7 +153,8 @@ The default lib compile matrix is intentionally only `darwin/arm64` and `linux/a
 - `TestRegisteredFunctions/ExecContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Verified under minweight on 2026-06-03; keep it out of the focused script and run it only when specifically checking interrupt behavior.
 - `TestIssue53`: passes under minweight; latest targeted run after index seek changes was 3.145s on 2026-06-04. Keep it out of the focused script; run it in full minweight checks or when index seek/order code changes.
 - `sqlite_dbpage` and custom-VFS snapshot compatibility: useful to reduce user surprise, but low priority because minweight does not implement physical page images or VFS. Keep these out of the focused script; run them in broad/full checks or when editing those shims.
-- Native SQLite page-file open/read-only behavior tests (`TestIssue97`, `TestIsReadOnly`, `TestOpenV2FailureErrorMessage`): keep them out of the focused minweight script. Minweight path-backed databases are directories opened with `minweight.Open`, and `mode=ro` is covered by `TestMinweightStorageEngineReadOnlyPathOpenFailsFast` until real minweight read-only open exists.
+- Native SQLite page-file open/read-only behavior tests (`TestIssue97`, `TestIsReadOnly`, `TestOpenV2FailureErrorMessage`): keep them out of focused and broad minweight scripts. Minweight path-backed databases are directories opened with `minweight.Open`, and `mode=ro` is covered by `TestMinweightStorageEngineReadOnlyPathOpenFailsFast` until real minweight read-only open exists.
+- `TestVFS`: keep it out of focused and broad minweight scripts. Minweight does not implement VFS I/O; the current VFS path is only read-only logical snapshot import coverage, not writable/native VFS support.
 - Native SQLite WAL file lifecycle tests (`TestFcntlPersistWAL`): skip under minweight because minweight does not implement SQLite WAL files. Minweight coverage is `TestMinweightStorageEngineJournalModeWALStaysRollback`, which verifies `PRAGMA journal_mode=WAL` remains `delete` and no `-wal` placeholder is created.
 - Full `./test-minweight-full.sh`: currently about 8m15s on darwin/arm64 because it includes the two expiring-context stress tests. Latest full run: 494.331s on 2026-06-04 with `-p 8 -parallel 8`. Run after broad engine changes or before larger milestones, not after every narrow commit.
 - `STORAGE_ENGINE_MATRIX=full ./test-storage-engine.sh`: full cross-target lib test-binary compilation matrix. Run when storage-engine ABI signatures or generated-code wrappers change broadly, not after every commit. The default script already covers the high-signal `darwin/arm64` and `linux/amd64` targets.
