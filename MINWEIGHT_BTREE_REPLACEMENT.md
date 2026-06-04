@@ -278,7 +278,7 @@ WAL 语义不是 pager hook，而是 transaction view 的策略变化。只有�
 下一步不再优先补 pager/VFS/dbpage 表面兼容，而是按下面顺序推进 btree 语义：
 
 1. 已完成：path-backed persistence 从 `minweight.New()` + placeholder file 改为 `minweight.Open(filename, options...)`；`BtreeClose` 在最后一个 handle 关闭时从 `engine.dbs` 删除并调用 `store.Close()`。测试覆盖 close/reopen 后数据仍在，且换一个 `NewMinweightStorageEngine()` 后仍能读到同一路径数据。
-2. 已完成：清理 WAL 半支持。未验证的 `StorageEnginePagerWalSupport` / `_sqlite3PagerWalSupported` hook 已移除；`SQLITE_FCNTL_PERSIST_WAL` 这类文件名占位只能叫 placeholder，不代表 WAL 支持。
+2. 已完成：清理 WAL 半支持。未验证的 `StorageEnginePagerWalSupport` / `_sqlite3PagerWalSupported` hook 已移除；minweight 不创建 `-wal` placeholder，`PRAGMA journal_mode=WAL` 在当前阶段保持 rollback `delete` 模式，`SQLITE_FCNTL_PERSIST_WAL` 只保留为可见 FileControl 状态，不代表 WAL 支持。
 3. 已完成：修复 sqlite3* 复用后的 stale engine binding。连接关闭会清理 db-level binding；旧连接仍通过已经打开的 btree/cursor handle dispatch，新连接不会继承旧 engine 的 db alias。
 4. 已完成：transaction overlay + WriteBatch commit。写入口写 per-writer delta 和 working metadata；commit phase two 用 `minweight.Store.WriteBatch` 批量落到 committed store；rollback/savepoint/statement rollback 恢复或丢弃 overlay，不再扫描/重放整库。
 5. adapter view 接口：读路径已经不再用 writer whole-store snapshot 隐藏未提交写；int-key table cursor movement、versioned non-int-key sequential movement、versioned-root `BtreeIndexMoveto` 已经只依赖 `Get`/`SeekGE`/`SeekLE`/`ReverseScanRange` 和 overlay。下一步要把剩余 snapshot read path 换成 generation pin + read/write set validation；显式长读事务先不支持。
@@ -321,7 +321,7 @@ SQLite 上层仍有一些地方会碰 pager/file-shaped 状态。minweight 当�
 
 ### 容易误导的 shim
 
-- `SQLITE_FCNTL_PERSIST_WAL` / `-wal` 占位文件：当前只是文件名层面的占位和清理策略，不代表真实 WAL。
+- `SQLITE_FCNTL_PERSIST_WAL`：当前只是可见 FileControl 状态，不创建 `-wal` 占位文件，也不代表真实 WAL。
 - `sqlite_dbpage` 逻辑 page 1 header：只避免 dbpage 读路径直接解 fake pager，不代表完整 SQLite page image。
 - read-only VFS snapshot import：当前不是 minweight VFS 支持，而是短暂切回 native btree，把 VFS-backed SQLite page file 序列化成逻辑 snapshot，再 replay 到 minweight，并标记 readonly。
 
@@ -329,7 +329,7 @@ SQLite 上层仍有一些地方会碰 pager/file-shaped 状态。minweight 当�
 
 - `read-only VFS snapshot import`
 - `logical dbpage header compatibility`
-- `WAL placeholder cleanup`
+- `WAL disabled / PERSIST_WAL visible state`
 
 不支持的能力应明确 fail fast：
 

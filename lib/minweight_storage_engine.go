@@ -100,7 +100,6 @@ type minweightBtree struct {
 	persistWAL  bool
 	backupCount int32
 	mmapSize    int64
-	walActive   bool
 	txn         *minweightTxn
 }
 
@@ -2377,55 +2376,6 @@ func (bt *minweightBtree) hasOpenTransaction() bool {
 	return false
 }
 
-func (bt *minweightBtree) walFilename() string {
-	if bt.filename == 0 {
-		return ""
-	}
-	return libc.GoString(bt.filename) + "-wal"
-}
-
-func (bt *minweightBtree) createWALPlaceholder() int32 {
-	name := bt.walFilename()
-	if name == "" {
-		return SQLITE_OK
-	}
-	bt.mu.Lock()
-	active := bt.walActive
-	bt.mu.Unlock()
-	if active {
-		return SQLITE_OK
-	}
-	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0666)
-	if err != nil {
-		return SQLITE_CANTOPEN
-	}
-	if err := f.Close(); err != nil {
-		return SQLITE_CANTOPEN
-	}
-	bt.mu.Lock()
-	bt.walActive = true
-	bt.mu.Unlock()
-	return SQLITE_OK
-}
-
-func (bt *minweightBtree) closeWALPlaceholder() int32 {
-	name := bt.walFilename()
-	if name == "" {
-		return SQLITE_OK
-	}
-	bt.mu.Lock()
-	remove := bt.walActive && !bt.persistWAL
-	bt.walActive = false
-	bt.mu.Unlock()
-	if !remove {
-		return SQLITE_OK
-	}
-	if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
-		return SQLITE_IOERR
-	}
-	return SQLITE_OK
-}
-
 func (bt *minweightBtree) releaseTrans() {
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
@@ -2666,11 +2616,6 @@ func (e *minweightStorageEngine) BtreeClose(ctx BtreeContext, p BtreeHandle) (r 
 	e.mu.Unlock()
 	if bt != nil && bt.schema != 0 {
 		Xsqlite3_free(ctx.tls, bt.schema)
-	}
-	if bt != nil {
-		if rc := bt.closeWALPlaceholder(); rc != SQLITE_OK {
-			return rc
-		}
 	}
 	if bt != nil && bt.pager != 0 {
 		Xsqlite3_free(ctx.tls, bt.pager)
@@ -2999,12 +2944,6 @@ func (e *minweightStorageEngine) BtreeBeginTrans(ctx BtreeContext, p BtreeHandle
 				bt.releaseTrans()
 			}
 			return minweightSQLiteError(err)
-		}
-		if rc := bt.createWALPlaceholder(); rc != SQLITE_OK {
-			if acquired {
-				bt.releaseTrans()
-			}
-			return rc
 		}
 		return SQLITE_OK
 	}

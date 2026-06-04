@@ -58,7 +58,7 @@ Last updated: 2026-06-04.
 - Split cursor-restore tests into `lib/minweight_storage_engine_cursor_test.go` and added direct coverage for stale index cursor restore, last-row anchored boundary `Next`/`Previous`, and missing store-key fail-fast behavior.
 - Moved `BtreeIntegrityCheck` off the whole-store `snapshot()` helper. Full checks now stream committed KV plus writer overlay without copying every item; partial checks scan only the selected roots' table/index ranges. The old `minweightSnapshot` item copy path was removed.
 - Added minweight logical `Serialize`/`Deserialize` round-trip support for schema and row data without pretending to expose SQLite page bytes.
-- Matched `SQLITE_FCNTL_PERSIST_WAL` for minweight's path-backed databases with `-wal` placeholder cleanup/persistence behavior.
+- Matched `SQLITE_FCNTL_PERSIST_WAL` as visible FileControl state for minweight path-backed databases without creating SQLite `-wal` placeholder files.
 - Matched write transaction rollback, explicit savepoint rollback/release, and statement-level rollback for minweight logical state.
 - Added minweight `BtreeTransferRow`/`BTREE_PREFORMAT` row transfer support for SQLite's VACUUM row-copy path.
 - Added logical `BtreeCopyFile` snapshot restore and `BtreeSetVersion` file-format cookie updates so VACUUM can replace the target btree without physical SQLite page images.
@@ -96,6 +96,7 @@ Last updated: 2026-06-04.
 - Wired pinned generation point reads into the adapter `get` path. A reader pinned to an older generation reconstructs updated, inserted, and deleted keys from retained commit changes for point lookup.
 - Wired pinned generation metadata reads into `visibleState()`/`visibleMeta()`/`visibleTable()`. Pinned readers now reconstruct older btree meta values, data version, root allocation, and table stats by walking retained committed `beforeState` records.
 - Allowed writer commit to proceed while ordinary autocommit read cursors are open. The old generation remains retained for the open cursor; explicit read transactions remain unsupported as long MVCC views and still make writer commit return `SQLITE_BUSY`.
+- Removed minweight `-wal` placeholder creation from write transactions. `PRAGMA journal_mode=WAL` now stays in rollback `delete` mode for minweight and direct coverage verifies that no `-wal` file is created; `SQLITE_FCNTL_PERSIST_WAL` remains only a visible FileControl state until real WAL semantics exist.
 - Cleaned the changed `./lib` lint surface. `golangci-lint run ./lib --timeout 5m` and `golangci-lint run ./lib --enable-only=gocyclo,funlen --new --timeout 5m` are the routine gates for this branch. A full historical `gocyclo,funlen` run still reports historical long/complex minweight functions and old tests; track those as planned refactors instead of re-running them after every narrow edit.
 - File size is not covered by the current golangci-lint gates. Keep `lib/minweight_storage_engine.go` on the explicit refactor list and split it by ownership boundary instead of assuming lint will catch it.
 
@@ -109,9 +110,9 @@ Routine minweight check:
 ./test-minweight-storage-engine.sh
 ```
 
-Latest focused minweight run: passed on 2026-06-04 with `TEST_PARALLEL=8`, including the competing-writer, busy-timeout retry, open-reader-cursor pinned-view, explicit-read-transaction `SQLITE_BUSY`, and versioned `BtreeIndexMoveto` probe-seek regressions.
+Latest focused minweight run: passed on 2026-06-04 with `TEST_PARALLEL=8`, including the competing-writer, busy-timeout retry, open-reader-cursor pinned-view, explicit-read-transaction `SQLITE_BUSY`, WAL-disabled/no-placeholder, and versioned `BtreeIndexMoveto` probe-seek regressions.
 
-This focused list includes `TestMinweightStorageEngineIntegrityCheck` plus direct `./lib` minweight integrity/cursor/index-probe tests and storage-engine binding cleanup coverage.
+This focused list includes `TestMinweightStorageEngineIntegrityCheck`, `TestMinweightStorageEngineJournalModeWALStaysRollback`, direct `./lib` minweight integrity/cursor/index-probe tests, and storage-engine binding cleanup coverage.
 It prioritizes real SQL/storage semantics such as `ATTACH`, `WITHOUT ROWID`, multi-connection committed visibility, rollback/savepoint behavior, backup/serialize logical round-trips, index lookup/order behavior, blob invalidation, and shared-lock behavior.
 The script runs minweight adapter-specific tests and generic top-level SQL behavior tests in separate `go test` processes. This keeps failures easier to attribute; stale sqlite3* reuse is covered by connection-close binding cleanup rather than by relying on process splitting.
 It does not include the low-priority `sqlite_dbpage` and custom-VFS snapshot shims; broad/full minweight runs still cover those.
@@ -139,7 +140,7 @@ Native btree storage-engine check:
 TEST_PARALLEL=8 ./test-storage-engine.sh
 ```
 
-Latest storage-engine script run: passed on 2026-06-04 with `TEST_PARALLEL=8`, including the lib binding cleanup test, competing-writer/busy-timeout/open-reader-cursor/versioned-index-probe minweight regressions, and the focused `./lib` test-binary compile matrix for `darwin/arm64` plus `linux/amd64`.
+Latest storage-engine script run: passed on 2026-06-04 with `TEST_PARALLEL=8`, including the lib binding cleanup test, competing-writer/busy-timeout/open-reader-cursor/WAL-disabled/versioned-index-probe minweight regressions, native focused behavior tests, and the focused `./lib` test-binary compile matrix for `darwin/arm64` plus `linux/amd64`.
 
 Do not run the full `TestRegisteredFunctions` with a 180s timeout as a routine native regression. It includes the two expiring-context stress subtests below and times out before finishing on this machine. Run the targeted subtests that touch the current change, or give the full test a longer timeout when specifically working on context interruption.
 `test-storage-engine.sh` also runs storage-engine API tests, lib binding cleanup tests, minweight adapter tests, and native/top-level behavior tests as separate `go test` processes. Keep that split for focused signal and faster diagnosis; correctness must still come from handle/db binding cleanup in the storage-engine dispatch layer.
@@ -152,13 +153,14 @@ The default lib compile matrix is intentionally only `darwin/arm64` and `linux/a
 - `TestIssue53`: passes under minweight; latest targeted run after index seek changes was 3.145s on 2026-06-04. Keep it out of the focused script; run it in full minweight checks or when index seek/order code changes.
 - `sqlite_dbpage` and custom-VFS snapshot compatibility: useful to reduce user surprise, but low priority because minweight does not implement physical page images or VFS. Keep these out of the focused script; run them in broad/full checks or when editing those shims.
 - Native SQLite page-file open/read-only behavior tests (`TestIssue97`, `TestIsReadOnly`, `TestOpenV2FailureErrorMessage`): keep them out of the focused minweight script. Minweight path-backed databases are directories opened with `minweight.Open`, and `mode=ro` is covered by `TestMinweightStorageEngineReadOnlyPathOpenFailsFast` until real minweight read-only open exists.
+- Native SQLite WAL file lifecycle tests (`TestFcntlPersistWAL`): skip under minweight because minweight does not implement SQLite WAL files. Minweight coverage is `TestMinweightStorageEngineJournalModeWALStaysRollback`, which verifies `PRAGMA journal_mode=WAL` remains `delete` and no `-wal` placeholder is created.
 - Full `./test-minweight-full.sh`: currently about 8m15s on darwin/arm64 because it includes the two expiring-context stress tests. Latest full run: 494.331s on 2026-06-04 with `-p 8 -parallel 8`. Run after broad engine changes or before larger milestones, not after every narrow commit.
 - `STORAGE_ENGINE_MATRIX=full ./test-storage-engine.sh`: full cross-target lib test-binary compilation matrix. Run when storage-engine ABI signatures or generated-code wrappers change broadly, not after every commit. The default script already covers the high-signal `darwin/arm64` and `linux/amd64` targets.
 - Full historical `golangci-lint run ./lib --enable-only=gocyclo,funlen --timeout 5m`: useful when specifically splitting old debt, but not a routine gate yet. Current new-code gate is `--new`; known old debt includes large minweight btree entrypoints such as insert/delete and historical test helpers.
 
 ## Minweight-Specific Skips
 
-No top-level tests are currently skipped only because `SQLITE_TEST_STORAGE_ENGINE=minweight` is set.
+- `TestFcntlPersistWAL`: skipped under minweight because it asserts native SQLite WAL file creation/cleanup. Minweight currently keeps `journal_mode=WAL` in rollback `delete` mode and must not create fake `-wal` placeholders.
 
 ## TODO
 
@@ -166,7 +168,7 @@ No top-level tests are currently skipped only because `SQLITE_TEST_STORAGE_ENGIN
 - P0: replace remaining transaction-start snapshot read paths with adapter-owned optimistic transaction views: autocommit read cursor generation pins now own ordinary `SELECT` views, while writer read set/range read set/write set, commit-phase validation, and in-memory old-generation retention cover current direct adapter paths.
 - P0: finish optimistic transaction-view integration. The current foundation tracks committed generations, point read sets, result-bounded seek-path byte-range read sets, autocommit cursor reader pins, retained key/state changes, pinned-generation point/range/metadata reads, and commit conflict tests; next steps are SQL-level `SQLITE_BUSY_SNAPSHOT` propagation coverage for stale writer conflicts and removal of any remaining transaction-start snapshot read paths from normal visibility.
 - P0: keep explicit long read transactions unsupported until the generation pin/release model is complete. Autocommit statement readers now pin short views; multi-statement old-view semantics still fail with rollback-journal-style `SQLITE_BUSY` rather than pretending full MVCC.
-- P0: keep WAL disabled/fail-fast until stable generation-pinned read views exist. The adapter no longer advertises pager WAL support; `-wal` placeholder behavior and `SQLITE_FCNTL_PERSIST_WAL` remain low-priority compatibility shims, not WAL support.
+- P0: keep WAL disabled/fail-fast until stable generation-pinned read views exist. The adapter no longer advertises pager WAL support and no longer creates `-wal` placeholders; `SQLITE_FCNTL_PERSIST_WAL` remains a low-priority visible-state shim, not WAL support.
 - P0: continue removing metadata races around read-view lifetime. Writer metadata now uses a working copy, commit publishes it with the overlay, and generation-pinned readers reconstruct old metadata from retained states; explicit transaction view lifetime still needs a clearer fail-fast/lock boundary before WAL-like concurrency can be claimed.
 - P1: multi-database `ATTACH` commit is still logical best-effort, not crash-atomic master-journal semantics. Treat it as SQL-level coverage only until a cross-database commit protocol exists.
 - P1: logical backup/serialize remain SQL replay/logical snapshot features, not SQLite page-image backup. Keep virtual tables, shadow tables, generated/hidden columns, stats tables, and backup progress semantics on the risk list.
