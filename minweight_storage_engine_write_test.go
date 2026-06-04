@@ -184,6 +184,88 @@ func TestMinweightStorageEnginePartialExpressionIndexWrites(t *testing.T) {
 	}
 }
 
+func TestMinweightStorageEngineRowidUpdateMaintainsIndexes(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, db)
+
+	execMinweightSQL(t, db, `
+		CREATE TABLE events(
+			id INTEGER PRIMARY KEY,
+			code TEXT NOT NULL UNIQUE,
+			payload TEXT NOT NULL
+		);
+		CREATE INDEX events_payload ON events(payload);
+	`)
+	execMinweightSQL(t, db, "INSERT INTO events(id, code, payload) VALUES (1, 'c1', 'p1'), (2, 'c2', 'p2')")
+	execMinweightSQL(t, db, "UPDATE events SET id = 10, code = 'c10', payload = 'p10' WHERE id = 1")
+
+	if got := minweightQueryStrings(t, db, "SELECT printf('%d:%s:%s', id, code, payload) FROM events ORDER BY id"); !reflect.DeepEqual(got, []string{"2:c2:p2", "10:c10:p10"}) {
+		t.Fatalf("rows after rowid update = %v", got)
+	}
+	if got := minweightQueryInt(t, db, "SELECT count(*) FROM events WHERE id = 1 OR code = 'c1' OR payload = 'p1'"); got != 0 {
+		t.Fatalf("old rowid/index entries count = %d, want 0", got)
+	}
+	if got := minweightQueryInt(t, db, "SELECT id FROM events INDEXED BY events_payload WHERE payload = 'p10'"); got != 10 {
+		t.Fatalf("secondary-index lookup id = %d, want 10", got)
+	}
+
+	if _, err := db.Exec("UPDATE events SET id = 20, code = 'c2', payload = 'bad' WHERE id = 10"); err == nil {
+		t.Fatal("conflicting rowid update succeeded")
+	}
+	if got := minweightQueryStrings(t, db, "SELECT printf('%d:%s:%s', id, code, payload) FROM events ORDER BY id"); !reflect.DeepEqual(got, []string{"2:c2:p2", "10:c10:p10"}) {
+		t.Fatalf("rows after failed rowid update = %v", got)
+	}
+}
+
+func TestMinweightStorageEngineWithoutRowidPrimaryKeyUpdateMaintainsIndexes(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, db)
+
+	execMinweightSQL(t, db, `
+		CREATE TABLE account_events(
+			account TEXT NOT NULL,
+			seq INTEGER NOT NULL,
+			tag TEXT NOT NULL UNIQUE,
+			payload TEXT NOT NULL,
+			PRIMARY KEY(account, seq)
+		) WITHOUT ROWID;
+		CREATE INDEX account_events_payload ON account_events(payload);
+	`)
+	execMinweightSQL(t, db, `
+		INSERT INTO account_events(account, seq, tag, payload) VALUES
+			('acct-a', 1, 'tag-a1', 'p-a1'),
+			('acct-b', 1, 'tag-b1', 'p-b1')
+	`)
+	execMinweightSQL(t, db, "UPDATE account_events SET account = 'acct-c', seq = 3, tag = 'tag-c3', payload = 'p-c3' WHERE account = 'acct-a' AND seq = 1")
+
+	if got := minweightQueryStrings(t, db, "SELECT account || ':' || seq || ':' || tag || ':' || payload FROM account_events ORDER BY account, seq"); !reflect.DeepEqual(got, []string{"acct-b:1:tag-b1:p-b1", "acct-c:3:tag-c3:p-c3"}) {
+		t.Fatalf("rows after WITHOUT ROWID primary-key update = %v", got)
+	}
+	if got := minweightQueryInt(t, db, "SELECT count(*) FROM account_events WHERE account = 'acct-a' OR tag = 'tag-a1' OR payload = 'p-a1'"); got != 0 {
+		t.Fatalf("old WITHOUT ROWID key/index entries count = %d, want 0", got)
+	}
+	if got := minweightQueryStrings(t, db, "SELECT account || ':' || seq FROM account_events INDEXED BY account_events_payload WHERE payload = 'p-c3'"); !reflect.DeepEqual(got, []string{"acct-c:3"}) {
+		t.Fatalf("secondary-index lookup after primary-key update = %v", got)
+	}
+
+	if _, err := db.Exec("UPDATE account_events SET account = 'acct-b', seq = 1, tag = 'tag-bad', payload = 'bad' WHERE account = 'acct-c' AND seq = 3"); err == nil {
+		t.Fatal("conflicting WITHOUT ROWID primary-key update succeeded")
+	}
+	if got := minweightQueryStrings(t, db, "SELECT account || ':' || seq || ':' || tag || ':' || payload FROM account_events ORDER BY account, seq"); !reflect.DeepEqual(got, []string{"acct-b:1:tag-b1:p-b1", "acct-c:3:tag-c3:p-c3"}) {
+		t.Fatalf("rows after failed WITHOUT ROWID primary-key update = %v", got)
+	}
+}
+
 func TestMinweightStorageEngineFailedStatementRollsBackTriggerWrites(t *testing.T) {
 	installMinweightStorageEngineForTest(t)
 
