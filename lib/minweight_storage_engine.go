@@ -344,7 +344,7 @@ func minweightSQLiteError(err error) int32 {
 		return SQLITE_OK
 	}
 	if errors.Is(err, errMinweightTxnConflict) {
-		return SQLITE_BUSY
+		return SQLITE_BUSY_SNAPSHOT
 	}
 	if errors.Is(err, minweight.ErrLocked) {
 		return SQLITE_BUSY

@@ -697,6 +697,40 @@ func TestMinweightCommitDetectsReadSetConflict(t *testing.T) {
 	}
 }
 
+func TestMinweightBtreeCommitReturnsBusySnapshotOnReadConflict(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	readKey := minweightTableKey(1, 1)
+	writeKey := minweightTableKey(1, 2)
+	if err := h.bt.store.Put(readKey, []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	if rc, _ := h.bt.beginTrans(h.ctx, 1); rc != SQLITE_OK {
+		t.Fatalf("beginTrans rc = %d, want SQLITE_OK", rc)
+	}
+	if _, ok, err := h.bt.get(readKey); err != nil || !ok {
+		t.Fatalf("transaction read ok=%v err=%v, want existing row", ok, err)
+	}
+	h.bt.changes = append(h.bt.changes, minweightCommitChange{
+		generation: 2,
+		keys: map[string]minweightCommittedKeyChange{
+			string(readKey): {key: readKey},
+		},
+	})
+	h.bt.generation = 2
+	if err := h.bt.put(writeKey, []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+
+	if rc := h.engine.BtreeCommit(h.ctx, h.btree); rc != SQLITE_BUSY_SNAPSHOT {
+		t.Fatalf("BtreeCommit rc = %d, want SQLITE_BUSY_SNAPSHOT", rc)
+	}
+	if _, ok, err := h.bt.store.Get(writeKey); err != nil || ok {
+		t.Fatalf("conflicted write visible ok=%v err=%v, want absent", ok, err)
+	}
+
+	h.bt.releaseTrans()
+}
+
 func TestMinweightCommitDetectsRangeReadConflict(t *testing.T) {
 	h := newMinweightBtreeTestHarness(t)
 	if rc, _ := h.bt.beginTrans(h.ctx, 1); rc != SQLITE_OK {
