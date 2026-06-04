@@ -8,8 +8,14 @@ package sqlite_test
 
 import (
 	"database/sql"
+	"errors"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+
+	sqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 func TestMinweightStorageEngineUpsertReplaceMaintainsIndexes(t *testing.T) {
@@ -175,5 +181,99 @@ func TestMinweightStorageEnginePartialExpressionIndexWrites(t *testing.T) {
 	execMinweightSQL(t, db, "UPDATE tasks SET status = 'open' WHERE id = 2")
 	if got := minweightQueryInt(t, db, "SELECT id FROM tasks INDEXED BY tasks_open_owner WHERE status = 'open' AND lower(owner) = 'alice'"); got != 2 {
 		t.Fatalf("expression-index lookup id = %d, want 2", got)
+	}
+}
+
+func TestMinweightStorageEngineFailedStatementRollsBackTriggerWrites(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, db)
+
+	execMinweightSQL(t, db, `
+		CREATE TABLE items(id INTEGER PRIMARY KEY, sku TEXT NOT NULL UNIQUE);
+		CREATE TABLE audit(seq INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT NOT NULL);
+		CREATE TRIGGER items_ai AFTER INSERT ON items BEGIN
+			INSERT INTO audit(event) VALUES ('insert:' || new.id || ':' || new.sku);
+		END;
+	`)
+	execMinweightSQL(t, db, "INSERT INTO items(id, sku) VALUES (1, 'base')")
+
+	if _, err := db.Exec("INSERT INTO items(id, sku) VALUES (2, 'ok-before-conflict'), (3, 'base'), (4, 'ok-after-conflict')"); err == nil {
+		t.Fatal("conflicting multi-row insert succeeded")
+	}
+	if got := minweightQueryStrings(t, db, "SELECT printf('%d:%s', id, sku) FROM items ORDER BY id"); !reflect.DeepEqual(got, []string{"1:base"}) {
+		t.Fatalf("items after failed statement = %v", got)
+	}
+	if got := minweightQueryStrings(t, db, "SELECT event FROM audit ORDER BY seq"); !reflect.DeepEqual(got, []string{"insert:1:base"}) {
+		t.Fatalf("audit after failed statement = %v", got)
+	}
+
+	execMinweightSQL(t, db, "INSERT INTO items(id, sku) VALUES (2, 'ok-after-rollback')")
+	if got := minweightQueryStrings(t, db, "SELECT printf('%d:%s', id, sku) FROM items ORDER BY id"); !reflect.DeepEqual(got, []string{"1:base", "2:ok-after-rollback"}) {
+		t.Fatalf("items after follow-up insert = %v", got)
+	}
+}
+
+func TestMinweightStorageEngineDeferredForeignKeyCommitFailureDoesNotPublish(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	path := filepath.Join(t.TempDir(), "deferred-fk.db")
+	writer, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, writer)
+	writer.SetMaxOpenConns(1)
+
+	execMinweightSQL(t, writer, "PRAGMA foreign_keys = ON")
+	execMinweightSQL(t, writer, `
+		CREATE TABLE parent(id INTEGER PRIMARY KEY);
+		CREATE TABLE child(
+			id INTEGER PRIMARY KEY,
+			parent_id INTEGER NOT NULL REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED
+		);
+	`)
+
+	tx, err := writer.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("INSERT INTO child(id, parent_id) VALUES (1, 99)"); err != nil {
+		rollbackMinweightTx(t, tx)
+		t.Fatalf("insert deferred orphan child: %v", err)
+	}
+	err = tx.Commit()
+	if err == nil {
+		t.Fatal("deferred foreign-key commit succeeded")
+	}
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		t.Fatalf("commit error = %T %v, want sqlite.Error", err, err)
+	}
+	if sqliteErr.Code() != sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY {
+		t.Fatalf("commit code = %d, want SQLITE_CONSTRAINT_FOREIGNKEY", sqliteErr.Code())
+	}
+
+	observer, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, observer)
+	observer.SetMaxOpenConns(1)
+	if got := minweightQueryInt(t, observer, "SELECT count(*) FROM child"); got != 0 {
+		t.Fatalf("observer child rows after failed commit = %d, want 0", got)
+	}
+
+	if _, err := writer.Exec("ROLLBACK"); err != nil && !strings.Contains(err.Error(), "no transaction") {
+		t.Fatalf("cleanup rollback: %v", err)
+	}
+	execMinweightSQL(t, writer, "INSERT INTO parent(id) VALUES (99)")
+	execMinweightSQL(t, writer, "INSERT INTO child(id, parent_id) VALUES (1, 99)")
+	if got := minweightQueryInt(t, observer, "SELECT count(*) FROM child WHERE parent_id = 99"); got != 1 {
+		t.Fatalf("observer child rows after valid insert = %d, want 1", got)
 	}
 }
