@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	minweight "github.com/JimChengLin/minweight_store"
@@ -39,21 +40,25 @@ var minweightMetaKey = []byte{minweightMetaPrefix}
 // NewMinweightStorageEngine returns a StorageEngine backed by minweight_store.
 func NewMinweightStorageEngine() StorageEngine {
 	return &minweightStorageEngine{
-		btrees:  map[uintptr]*minweightBtree{},
-		aliases: map[uintptr]uintptr{},
-		dbs:     map[string]*minweightDatabase{},
-		cursors: map[uintptr]*minweightCursor{},
-		next:    1,
+		btrees:      map[uintptr]*minweightBtree{},
+		aliases:     map[uintptr]uintptr{},
+		dbs:         map[string]*minweightDatabase{},
+		cursors:     map[uintptr]*minweightCursor{},
+		cursorSlots: []*minweightCursor{nil},
+		next:        1,
 	}
 }
 
 type minweightStorageEngine struct {
-	mu      sync.Mutex
-	next    uintptr
-	btrees  map[uintptr]*minweightBtree
-	aliases map[uintptr]uintptr
-	dbs     map[string]*minweightDatabase
-	cursors map[uintptr]*minweightCursor
+	mu              sync.RWMutex
+	next            uintptr
+	btrees          map[uintptr]*minweightBtree
+	aliases         map[uintptr]uintptr
+	dbs             map[string]*minweightDatabase
+	cursors         map[uintptr]*minweightCursor
+	cursorSlots     []*minweightCursor
+	freeCursorSlots []uintptr
+	incrblobCursors atomic.Int32
 }
 
 type minweightDatabase struct {
@@ -117,11 +122,19 @@ var minweightFileMethods = Tsqlite3_io_methods{
 
 var errMinweightTxnConflict = errors.New("minweight transaction read set conflict")
 
+func minweightLookupKeyString(key []byte) string {
+	if len(key) == 0 {
+		return ""
+	}
+	return unsafe.String(&key[0], len(key))
+}
+
 type minweightTable struct {
 	intKey   bool
 	rowCount int64
 	minRowid int64
 	maxRowid int64
+	maxKey   []byte
 }
 
 type minweightCursor struct {
@@ -174,6 +187,8 @@ type minweightTxn struct {
 	readRanges     []minweightReadRange
 	readMeta       bool
 	writes         map[string]minweightTxnWrite
+	overlay        *minweight.Store
+	hasDeleteWrite bool
 	savepoints     []minweightTxnSavepoint
 }
 
@@ -186,11 +201,13 @@ type minweightTxnWrite struct {
 	key     []byte
 	value   []byte
 	deleted bool
+	base    bool
 }
 
 type minweightTxnSavepoint struct {
-	state  minweightDBState
-	writes map[string]minweightTxnWrite
+	state          minweightDBState
+	writes         map[string]minweightTxnWrite
+	hasDeleteWrite bool
 }
 
 type minweightCommitChange struct {
@@ -226,8 +243,8 @@ func (e *minweightStorageEngine) btreeTokenLocked(ptr uintptr) uintptr {
 }
 
 func (e *minweightStorageEngine) btree(p BtreeHandle) *minweightBtree {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	bt := e.btrees[e.btreeTokenLocked(p.ptr)]
 	if bt == nil {
 		panic(fmt.Sprintf("sqlite minweight storage engine: unknown btree handle %#x", p.ptr))
@@ -236,23 +253,64 @@ func (e *minweightStorageEngine) btree(p BtreeHandle) *minweightBtree {
 }
 
 func (e *minweightStorageEngine) btreeForDB(db SQLiteHandle) *minweightBtree {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	return e.btrees[e.aliases[db.ptr]]
 }
 
 func (e *minweightStorageEngine) btreeForToken(token uintptr) *minweightBtree {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	return e.btrees[token]
 }
 
 func (e *minweightStorageEngine) cursor(pCur BtreeCursorHandle) *minweightCursor {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	raw := minweightBtCursorFromPointer(pCur.ptr)
+	if raw.FpBt != 0 {
+		e.mu.RLock()
+		if int(raw.FpBt) < len(e.cursorSlots) {
+			cur := e.cursorSlots[raw.FpBt]
+			e.mu.RUnlock()
+			if cur != nil {
+				return cur
+			}
+		} else {
+			e.mu.RUnlock()
+		}
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	cur := e.cursors[pCur.ptr]
 	if cur == nil {
 		panic("sqlite minweight storage engine: unknown cursor handle")
+	}
+	return cur
+}
+
+func (e *minweightStorageEngine) registerCursorLocked(ptr uintptr, cur *minweightCursor) uintptr {
+	var slot uintptr
+	n := len(e.freeCursorSlots)
+	if n != 0 {
+		slot = e.freeCursorSlots[n-1]
+		e.freeCursorSlots = e.freeCursorSlots[:n-1]
+		e.cursorSlots[slot] = cur
+	} else {
+		slot = uintptr(len(e.cursorSlots))
+		e.cursorSlots = append(e.cursorSlots, cur)
+	}
+	e.cursors[ptr] = cur
+	return slot
+}
+
+func (e *minweightStorageEngine) unregisterCursorLocked(ptr uintptr, slot uintptr) *minweightCursor {
+	cur := e.cursors[ptr]
+	delete(e.cursors, ptr)
+	if slot != 0 && int(slot) < len(e.cursorSlots) {
+		if cur == nil {
+			cur = e.cursorSlots[slot]
+		}
+		e.cursorSlots[slot] = nil
+		e.freeCursorSlots = append(e.freeCursorSlots, slot)
 	}
 	return cur
 }
@@ -745,10 +803,14 @@ func minweightAllocCString(ctx BtreeContext, s string) uintptr {
 
 func minweightTableKey(root uint32, rowid int64) []byte {
 	key := make([]byte, 13)
+	minweightTableKeyInto(key, root, rowid)
+	return key
+}
+
+func minweightTableKeyInto(key []byte, root uint32, rowid int64) {
 	key[0] = minweightTablePrefix
 	binary.BigEndian.PutUint32(key[1:5], root)
 	binary.BigEndian.PutUint64(key[5:13], uint64(rowid)^(1<<63))
-	return key
 }
 
 func minweightVersionedIndexKey(root uint32, suffix []byte) []byte {
@@ -769,7 +831,7 @@ func minweightIndexStoreKey(ctx BtreeContext, keyInfo uintptr, root uint32, keyB
 }
 
 func minweightRowIndexStoreKey(root uint32, row minweightRow) []byte {
-	return append([]byte(nil), row.storeKey...)
+	return row.storeKey
 }
 
 func minweightMoveIndexStoreKey(root uint32, row minweightRow) []byte {
@@ -813,9 +875,7 @@ func minweightIndexKeyVersionedForRoot(root uint32, key []byte) bool {
 }
 
 func minweightIndexKeyInVersionedRange(root uint32, key []byte) bool {
-	return minweightIndexKeyVersionedForRoot(root, key) &&
-		bytes.Compare(key, minweightVersionedIndexLower(root)) >= 0 &&
-		bytes.Compare(key, minweightVersionedIndexUpper(root)) < 0
+	return minweightIndexKeyVersionedForRoot(root, key)
 }
 
 func minweightIndexSeekAfter(key []byte) []byte {
@@ -840,8 +900,8 @@ func minweightIndexReadUpper(target []byte, rootUpper []byte, strict bool) []byt
 
 func minweightDecodeRow(item minweight.Item, intKey bool) minweightRow {
 	row := minweightRow{
-		storeKey: append([]byte(nil), item.Key...),
-		payload:  append([]byte(nil), item.Value...),
+		storeKey: item.Key,
+		payload:  item.Value,
 	}
 	if intKey {
 		u := binary.BigEndian.Uint64(item.Key[5:13]) ^ (1 << 63)
@@ -849,8 +909,7 @@ func minweightDecodeRow(item minweight.Item, intKey bool) minweightRow {
 		return row
 	}
 	if len(item.Value) != 0 {
-		row.key = append([]byte(nil), item.Value...)
-		row.payload = append([]byte(nil), item.Value...)
+		row.key = item.Value
 		return row
 	}
 	return row
@@ -862,29 +921,53 @@ type minweightRecordField struct {
 }
 
 func minweightComparableIndexKey(ctx BtreeContext, keyInfo uintptr, record []byte) ([]byte, error) {
-	fields, err := minweightParseRecord(record)
-	if err != nil {
-		return nil, err
+	headerSize, n, ok := minweightGetVarint(record)
+	if !ok || headerSize < uint64(n) || headerSize > uint64(len(record)) {
+		return nil, fmt.Errorf("minweight sqlite index key: corrupt record header")
 	}
+	headerEnd := int(headerSize)
+	headerOffset := n
+	dataOffset := headerEnd
 	out := make([]byte, 0, len(record)*2+16)
-	for i, field := range fields {
-		sortFlags := minweightKeyInfoSortFlags(keyInfo, i)
+	fieldIndex := 0
+	for headerOffset < headerEnd {
+		serial, consumed, ok := minweightGetVarint(record[headerOffset:headerEnd])
+		if !ok {
+			return nil, fmt.Errorf("minweight sqlite index key: corrupt record serial type")
+		}
+		headerOffset += consumed
+		size, ok := minweightSerialTypeLen(serial)
+		if !ok {
+			return nil, fmt.Errorf("minweight sqlite index key: unsupported serial type %d", serial)
+		}
+		if size > len(record)-dataOffset {
+			return nil, fmt.Errorf("minweight sqlite index key: corrupt record payload")
+		}
+		field := minweightRecordField{
+			serial: serial,
+			data:   record[dataOffset : dataOffset+size],
+		}
+		dataOffset += size
+		sortFlags := minweightKeyInfoSortFlags(keyInfo, fieldIndex)
 		if sortFlags&uint8(KEYINFO_ORDER_BIGNULL) != 0 {
 			return nil, fmt.Errorf("minweight sqlite index key: NULLS FIRST/LAST sort flag is not supported")
 		}
-		fieldKey, err := minweightComparableFieldKey(ctx, keyInfo, i, field)
+		start := len(out)
+		var err error
+		out, err = minweightAppendComparableFieldKey(ctx, keyInfo, fieldIndex, field, out)
 		if err != nil {
 			return nil, err
 		}
 		if sortFlags&uint8(KEYINFO_ORDER_DESC) != 0 {
-			for j := range fieldKey {
-				fieldKey[j] = ^fieldKey[j]
+			for j := start; j < len(out); j++ {
+				out[j] = ^out[j]
 			}
 		}
-		out = append(out, fieldKey...)
+		fieldIndex++
 	}
-	out = append(out, 0x50)
-	out = minweightAppendEscapedBytes(out, record)
+	if headerOffset != headerEnd {
+		return nil, fmt.Errorf("minweight sqlite index key: corrupt record header")
+	}
 	return out, nil
 }
 
@@ -905,58 +988,37 @@ func minweightComparableIndexProbeKey(ctx BtreeContext, root uint32, pIdxKey uin
 }
 
 func minweightComparableUnpackedPrefix(ctx BtreeContext, rec *TUnpackedRecord) ([]byte, error) {
-	out := []byte{}
-	for i := 0; i < int(rec.FnField); i++ {
+	fields := int(rec.FnField)
+	out := make([]byte, 0, minweightComparableUnpackedCapacity(rec, fields))
+	for i := 0; i < fields; i++ {
 		sortFlags := minweightKeyInfoSortFlags(rec.FpKeyInfo, i)
 		if sortFlags&uint8(KEYINFO_ORDER_BIGNULL) != 0 {
 			return nil, fmt.Errorf("minweight sqlite index key: NULLS FIRST/LAST sort flag is not supported")
 		}
-		fieldKey, err := minweightComparableMemKey(ctx, rec.FpKeyInfo, i, rec.FaMem+uintptr(i)*unsafe.Sizeof(TMem{}))
+		start := len(out)
+		var err error
+		out, err = minweightAppendComparableMemKey(ctx, rec.FpKeyInfo, i, rec.FaMem+uintptr(i)*unsafe.Sizeof(TMem{}), out)
 		if err != nil {
 			return nil, err
 		}
 		if sortFlags&uint8(KEYINFO_ORDER_DESC) != 0 {
-			for j := range fieldKey {
-				fieldKey[j] = ^fieldKey[j]
+			for j := start; j < len(out); j++ {
+				out[j] = ^out[j]
 			}
 		}
-		out = append(out, fieldKey...)
 	}
 	return out, nil
 }
 
-func minweightParseRecord(record []byte) ([]minweightRecordField, error) {
-	headerSize, n, ok := minweightGetVarint(record)
-	if !ok || headerSize < uint64(n) || headerSize > uint64(len(record)) {
-		return nil, fmt.Errorf("minweight sqlite index key: corrupt record header")
-	}
-	headerEnd := int(headerSize)
-	headerOffset := n
-	dataOffset := headerEnd
-	fields := []minweightRecordField{}
-	for headerOffset < headerEnd {
-		serial, consumed, ok := minweightGetVarint(record[headerOffset:headerEnd])
-		if !ok {
-			return nil, fmt.Errorf("minweight sqlite index key: corrupt record serial type")
+func minweightComparableUnpackedCapacity(rec *TUnpackedRecord, fields int) int {
+	capacity := fields * 16
+	for i := 0; i < fields; i++ {
+		mem := minweightMemFromPointer(rec.FaMem + uintptr(i)*unsafe.Sizeof(TMem{}))
+		if mem.Fn > 0 {
+			capacity += int(mem.Fn)
 		}
-		headerOffset += consumed
-		size, ok := minweightSerialTypeLen(serial)
-		if !ok {
-			return nil, fmt.Errorf("minweight sqlite index key: unsupported serial type %d", serial)
-		}
-		if size > len(record)-dataOffset {
-			return nil, fmt.Errorf("minweight sqlite index key: corrupt record payload")
-		}
-		fields = append(fields, minweightRecordField{
-			serial: serial,
-			data:   record[dataOffset : dataOffset+size],
-		})
-		dataOffset += size
 	}
-	if headerOffset != headerEnd {
-		return nil, fmt.Errorf("minweight sqlite index key: corrupt record header")
-	}
-	return fields, nil
+	return capacity
 }
 
 func minweightGetVarint(p []byte) (uint64, int, bool) {
@@ -1005,6 +1067,10 @@ func minweightSerialTypeLen(serial uint64) (int, bool) {
 
 func minweightComparableFieldKey(ctx BtreeContext, keyInfo uintptr, fieldIndex int, field minweightRecordField) ([]byte, error) {
 	out := make([]byte, 0, len(field.data)+16)
+	return minweightAppendComparableFieldKey(ctx, keyInfo, fieldIndex, field, out)
+}
+
+func minweightAppendComparableFieldKey(ctx BtreeContext, keyInfo uintptr, fieldIndex int, field minweightRecordField, out []byte) ([]byte, error) {
 	switch field.serial {
 	case 0:
 		return append(out, 0x10), nil
@@ -1039,12 +1105,21 @@ func minweightComparableFieldKey(ctx BtreeContext, keyInfo uintptr, fieldIndex i
 
 func minweightComparableMemKey(ctx BtreeContext, keyInfo uintptr, fieldIndex int, pMem uintptr) ([]byte, error) {
 	mem := minweightMemFromPointer(pMem)
-	flags := int(mem.Fflags)
+	out := make([]byte, 0, minweightComparableMemKeyCapacity(mem))
+	return minweightAppendComparableMemKey(ctx, keyInfo, fieldIndex, pMem, out)
+}
+
+func minweightComparableMemKeyCapacity(mem *TMem) int {
 	capacity := 16
 	if mem.Fn > 0 {
 		capacity += int(mem.Fn)
 	}
-	out := make([]byte, 0, capacity)
+	return capacity
+}
+
+func minweightAppendComparableMemKey(ctx BtreeContext, keyInfo uintptr, fieldIndex int, pMem uintptr, out []byte) ([]byte, error) {
+	mem := minweightMemFromPointer(pMem)
+	flags := int(mem.Fflags)
 	if flags&MEM_Null != 0 {
 		return append(out, 0x10), nil
 	}
@@ -1067,7 +1142,7 @@ func minweightComparableMemKey(ctx BtreeContext, keyInfo uintptr, fieldIndex int
 		if mem.Fenc != uint8(SQLITE_UTF8) {
 			return nil, fmt.Errorf("minweight sqlite index key: only UTF-8 text is supported")
 		}
-		data, err := minweightMemBytes(mem)
+		data, err := minweightMemBytesView(mem)
 		if err != nil {
 			return nil, err
 		}
@@ -1078,7 +1153,7 @@ func minweightComparableMemKey(ctx BtreeContext, keyInfo uintptr, fieldIndex int
 		out = append(out, 0x30)
 		return minweightAppendEscapedBytes(out, normalized), nil
 	}
-	data, err := minweightMemBytes(mem)
+	data, err := minweightMemBytesView(mem)
 	if err != nil {
 		return nil, err
 	}
@@ -1093,7 +1168,7 @@ func minweightComparableMemKey(ctx BtreeContext, keyInfo uintptr, fieldIndex int
 	return minweightAppendEscapedBytes(out, data), nil
 }
 
-func minweightMemBytes(mem *TMem) ([]byte, error) {
+func minweightMemBytesView(mem *TMem) ([]byte, error) {
 	if mem.Fn < 0 {
 		return nil, fmt.Errorf("minweight sqlite index key: negative value length")
 	}
@@ -1103,7 +1178,7 @@ func minweightMemBytes(mem *TMem) ([]byte, error) {
 	if mem.Fz == 0 {
 		return nil, fmt.Errorf("minweight sqlite index key: nil value pointer")
 	}
-	return append([]byte(nil), minweightByteSliceFromPointer(mem.Fz, int(mem.Fn))...), nil
+	return minweightByteSliceFromPointer(mem.Fz, int(mem.Fn)), nil
 }
 
 func minweightDecodeRecordInteger(field minweightRecordField) int64 {
@@ -1234,6 +1309,7 @@ func minweightNormalizeTextForCollation(ctx BtreeContext, keyInfo uintptr, field
 func minweightCloneTables(src map[uint32]minweightTable) map[uint32]minweightTable {
 	dst := make(map[uint32]minweightTable, len(src))
 	for root, table := range src {
+		table.maxKey = append([]byte(nil), table.maxKey...)
 		dst[root] = table
 	}
 	return dst
@@ -1260,7 +1336,15 @@ func minweightTablesEqual(a, b map[uint32]minweightTable) bool {
 		return false
 	}
 	for root, table := range a {
-		if b[root] != table {
+		other, ok := b[root]
+		if !ok {
+			return false
+		}
+		if table.intKey != other.intKey ||
+			table.rowCount != other.rowCount ||
+			table.minRowid != other.minRowid ||
+			table.maxRowid != other.maxRowid ||
+			!bytes.Equal(table.maxKey, other.maxKey) {
 			return false
 		}
 	}
@@ -1388,24 +1472,112 @@ func (db *minweightDatabase) releaseAllReaderStateLocked(bt *minweightBtree) {
 
 func minweightCloneTxnWrites(src map[string]minweightTxnWrite) map[string]minweightTxnWrite {
 	dst := make(map[string]minweightTxnWrite, len(src))
-	for key, write := range src {
+	for _, write := range src {
 		write.key = append([]byte(nil), write.key...)
 		write.value = append([]byte(nil), write.value...)
-		dst[key] = write
+		dst[minweightLookupKeyString(write.key)] = write
 	}
 	return dst
 }
 
+func minweightCloneTxnWrite(write minweightTxnWrite) minweightTxnWrite {
+	write.key = append([]byte(nil), write.key...)
+	write.value = append([]byte(nil), write.value...)
+	return write
+}
+
+func minweightBuildTxnOverlay(writes map[string]minweightTxnWrite) (*minweight.Store, error) {
+	overlay := minweight.New()
+	if len(writes) == 0 {
+		return overlay, nil
+	}
+	var batch minweight.WriteBatch
+	for _, write := range writes {
+		if err := batch.Put(write.key, nil); err != nil {
+			return nil, err
+		}
+	}
+	if err := overlay.WriteBatch(batch); err != nil {
+		return nil, err
+	}
+	return overlay, nil
+}
+
+func (tx *minweightTxn) resetWrites() {
+	tx.writes = map[string]minweightTxnWrite{}
+	tx.overlay = nil
+	tx.hasDeleteWrite = false
+}
+
+func (tx *minweightTxn) setWrite(write minweightTxnWrite) error {
+	return tx.setWriteOwned(minweightCloneTxnWrite(write))
+}
+
+func (tx *minweightTxn) setWriteOwned(write minweightTxnWrite) error {
+	key := minweightLookupKeyString(write.key)
+	if write.deleted {
+		tx.hasDeleteWrite = true
+	}
+	if !write.base {
+		previous, ok := tx.writes[key]
+		if ok && previous.base {
+			write.base = true
+		}
+	}
+	tx.writes[key] = write
+	if tx.overlay != nil {
+		return tx.overlay.Put(write.key, nil)
+	}
+	return nil
+}
+
+func (tx *minweightTxn) removeWrite(key []byte) error {
+	keyLookup := minweightLookupKeyString(key)
+	if _, ok := tx.writes[keyLookup]; !ok {
+		return nil
+	}
+	delete(tx.writes, keyLookup)
+	if tx.overlay != nil {
+		_, err := tx.overlay.Delete(key)
+		return err
+	}
+	return nil
+}
+
+func (tx *minweightTxn) ensureOverlay() error {
+	if tx.overlay != nil {
+		return nil
+	}
+	var err error
+	tx.overlay, err = minweightBuildTxnOverlay(tx.writes)
+	return err
+}
+
+func (tx *minweightTxn) overlayStore() (*minweight.Store, error) {
+	if err := tx.ensureOverlay(); err != nil {
+		return nil, err
+	}
+	return tx.overlay, nil
+}
+
+func (tx *minweightTxn) hasWrites() bool {
+	return len(tx.writes) != 0
+}
+
 func (tx *minweightTxn) cloneSavepoint() minweightTxnSavepoint {
 	return minweightTxnSavepoint{
-		state:  minweightCloneState(tx.state),
-		writes: minweightCloneTxnWrites(tx.writes),
+		state:          minweightCloneState(tx.state),
+		writes:         minweightCloneTxnWrites(tx.writes),
+		hasDeleteWrite: tx.hasDeleteWrite,
 	}
 }
 
-func (tx *minweightTxn) restoreSavepoint(savepoint minweightTxnSavepoint) {
+func (tx *minweightTxn) restoreSavepoint(savepoint minweightTxnSavepoint) error {
 	tx.state = minweightCloneState(savepoint.state)
 	tx.writes = minweightCloneTxnWrites(savepoint.writes)
+	tx.overlay = nil
+	tx.hasDeleteWrite = savepoint.hasDeleteWrite
+	return nil
 }
 
 func (bt *minweightBtree) newTxnLocked() *minweightTxn {
@@ -1477,6 +1649,20 @@ func (bt *minweightBtree) txnWritesSnapshot() map[string]minweightTxnWrite {
 	return minweightCloneTxnWrites(tx.writes)
 }
 
+func (bt *minweightBtree) txnWriteForKey(key []byte) (minweightTxnWrite, bool) {
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	tx := bt.activeTxnLocked()
+	if tx == nil {
+		return minweightTxnWrite{}, false
+	}
+	write, ok := tx.writes[minweightLookupKeyString(key)]
+	if !ok {
+		return minweightTxnWrite{}, false
+	}
+	return write, true
+}
+
 func (bt *minweightBtree) readGenerationLocked() uint64 {
 	if tx := bt.activeTxnLocked(); tx != nil {
 		return tx.baseGeneration
@@ -1488,38 +1674,44 @@ func (bt *minweightBtree) readGenerationLocked() uint64 {
 }
 
 func (db *minweightDatabase) valueAtGenerationLocked(key []byte, value []byte, ok bool, generation uint64) ([]byte, bool) {
+	clone := false
 	for i := len(db.changes) - 1; i >= 0; i-- {
 		change := db.changes[i]
 		if change.generation <= generation {
 			break
 		}
-		keyChange, changed := change.keys[string(key)]
+		keyChange, changed := change.keys[minweightLookupKeyString(key)]
 		if !changed {
 			continue
 		}
 		if !keyChange.beforeExist {
 			value = nil
 			ok = false
+			clone = false
 			continue
 		}
 		value = keyChange.before
 		ok = true
+		clone = true
 	}
 	if !ok {
 		return nil, false
 	}
-	return append([]byte(nil), value...), true
+	if clone {
+		return append([]byte(nil), value...), true
+	}
+	return value, true
 }
 
 func (bt *minweightBtree) get(key []byte) ([]byte, bool, error) {
 	bt.mu.Lock()
 	if tx := bt.activeTxnLocked(); tx != nil {
-		if write, ok := tx.writes[string(key)]; ok {
+		if write, ok := tx.writes[minweightLookupKeyString(key)]; ok {
 			bt.mu.Unlock()
 			if write.deleted {
 				return nil, false, nil
 			}
-			return append([]byte(nil), write.value...), true, nil
+			return write.value, true, nil
 		}
 	}
 	generation := bt.readGenerationLocked()
@@ -1530,9 +1722,6 @@ func (bt *minweightBtree) get(key []byte) ([]byte, bool, error) {
 	}
 	bt.mu.Lock()
 	value, ok = bt.valueAtGenerationLocked(key, value, ok, generation)
-	if tx := bt.activeTxnLocked(); tx != nil {
-		tx.reads[string(key)] = struct{}{}
-	}
 	bt.mu.Unlock()
 	return value, ok, nil
 }
@@ -1541,22 +1730,42 @@ func (bt *minweightBtree) noteRangeRead(lower []byte, upper []byte) {
 	bt.mu.Lock()
 	if tx := bt.activeTxnLocked(); tx != nil {
 		tx.readRanges = append(tx.readRanges, minweightReadRange{
-			lower: append([]byte(nil), lower...),
-			upper: append([]byte(nil), upper...),
+			lower: lower,
+			upper: upper,
 		})
 	}
 	bt.mu.Unlock()
 }
 
 func (bt *minweightBtree) put(key, value []byte) error {
+	return bt.putWithBaseExists(key, value, true)
+}
+
+func (bt *minweightBtree) putWithBaseExists(key, value []byte, baseExists bool) error {
 	bt.mu.Lock()
 	if tx := bt.activeTxnLocked(); tx != nil {
-		tx.writes[string(key)] = minweightTxnWrite{
-			key:   append([]byte(nil), key...),
-			value: append([]byte(nil), value...),
-		}
+		err := tx.setWrite(minweightTxnWrite{
+			key:   key,
+			value: value,
+			base:  baseExists,
+		})
 		bt.mu.Unlock()
-		return nil
+		return err
+	}
+	bt.mu.Unlock()
+	return bt.store.Put(key, value)
+}
+
+func (bt *minweightBtree) putOwnedWithBaseExists(key, value []byte, baseExists bool) error {
+	bt.mu.Lock()
+	if tx := bt.activeTxnLocked(); tx != nil {
+		err := tx.setWriteOwned(minweightTxnWrite{
+			key:   key,
+			value: value,
+			base:  baseExists,
+		})
+		bt.mu.Unlock()
+		return err
 	}
 	bt.mu.Unlock()
 	return bt.store.Put(key, value)
@@ -1565,15 +1774,25 @@ func (bt *minweightBtree) put(key, value []byte) error {
 func (bt *minweightBtree) delete(key []byte) (bool, error) {
 	bt.mu.Lock()
 	if tx := bt.activeTxnLocked(); tx != nil {
-		keyString := string(key)
-		if write, ok := tx.writes[keyString]; ok {
+		keyLookup := minweightLookupKeyString(key)
+		if write, ok := tx.writes[keyLookup]; ok {
 			existed := !write.deleted
-			tx.writes[keyString] = minweightTxnWrite{
-				key:     append([]byte(nil), key...),
-				deleted: true,
+			if !existed {
+				bt.mu.Unlock()
+				return false, nil
 			}
+			if !write.base {
+				err := tx.removeWrite(write.key)
+				bt.mu.Unlock()
+				return existed, err
+			}
+			err := tx.setWrite(minweightTxnWrite{
+				key:     key,
+				deleted: true,
+				base:    true,
+			})
 			bt.mu.Unlock()
-			return existed, nil
+			return existed, err
 		}
 		generation := bt.readGenerationLocked()
 		bt.mu.Unlock()
@@ -1584,13 +1803,13 @@ func (bt *minweightBtree) delete(key []byte) (bool, error) {
 		bt.mu.Lock()
 		_, existed = bt.valueAtGenerationLocked(key, value, existed, generation)
 		if tx := bt.activeTxnLocked(); tx != nil {
-			tx.reads[keyString] = struct{}{}
-			tx.writes[keyString] = minweightTxnWrite{
-				key:     append([]byte(nil), key...),
+			err := tx.setWrite(minweightTxnWrite{
+				key:     key,
 				deleted: true,
-			}
+				base:    existed,
+			})
 			bt.mu.Unlock()
-			return existed, nil
+			return existed, err
 		}
 		bt.mu.Unlock()
 		return bt.store.Delete(key)
@@ -1599,18 +1818,119 @@ func (bt *minweightBtree) delete(key []byte) (bool, error) {
 	return bt.store.Delete(key)
 }
 
+func (bt *minweightBtree) deleteKnownExisting(key []byte) (bool, error) {
+	bt.mu.Lock()
+	if tx := bt.activeTxnLocked(); tx != nil {
+		keyLookup := minweightLookupKeyString(key)
+		if write, ok := tx.writes[keyLookup]; ok {
+			if write.deleted {
+				bt.mu.Unlock()
+				return false, nil
+			}
+			if !write.base {
+				err := tx.removeWrite(write.key)
+				bt.mu.Unlock()
+				return true, err
+			}
+			err := tx.setWriteOwned(minweightTxnWrite{
+				key:     key,
+				deleted: true,
+				base:    true,
+			})
+			bt.mu.Unlock()
+			return true, err
+		}
+		err := tx.setWriteOwned(minweightTxnWrite{
+			key:     key,
+			deleted: true,
+			base:    true,
+		})
+		bt.mu.Unlock()
+		return true, err
+	}
+	bt.mu.Unlock()
+	_, err := bt.store.Delete(key)
+	return true, err
+}
+
 func (bt *minweightBtree) visibleDataVer() uint32 {
-	return bt.visibleState().dataVer
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	if tx := bt.activeTxnLocked(); tx != nil {
+		return tx.state.dataVer
+	}
+	generation := bt.readGenerationLocked()
+	if generation == bt.generation {
+		return bt.dataVer
+	}
+	return bt.stateAtGenerationLocked(generation).dataVer
 }
 
 func (bt *minweightBtree) visibleTable(root uint32) (minweightTable, bool) {
-	state := bt.visibleState()
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	if tx := bt.activeTxnLocked(); tx != nil {
+		table, ok := tx.state.tables[root]
+		return table, ok
+	}
+	generation := bt.readGenerationLocked()
+	if generation == bt.generation {
+		table, ok := bt.tables[root]
+		return table, ok
+	}
+	state := bt.stateAtGenerationLocked(generation)
 	table, ok := state.tables[root]
 	return table, ok
 }
 
+func (bt *minweightBtree) visibleTableAndDataVer(root uint32) (minweightTable, uint32, bool) {
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	if tx := bt.activeTxnLocked(); tx != nil {
+		table, ok := tx.state.tables[root]
+		return table, tx.state.dataVer, ok
+	}
+	generation := bt.readGenerationLocked()
+	if generation == bt.generation {
+		table, ok := bt.tables[root]
+		return table, bt.dataVer, ok
+	}
+	state := bt.stateAtGenerationLocked(generation)
+	table, ok := state.tables[root]
+	return table, state.dataVer, ok
+}
+
+func (bt *minweightBtree) indexProbeBeyondMax(root uint32, key []byte) bool {
+	table, ok := bt.visibleTable(root)
+	if !ok || table.intKey {
+		return false
+	}
+	return table.rowCount == 0 || len(table.maxKey) != 0 && bytes.Compare(key, table.maxKey) > 0
+}
+
 func (bt *minweightBtree) visibleMeta(idx int32) uint32 {
-	state := bt.visibleState()
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	if tx := bt.activeTxnLocked(); tx != nil {
+		if idx == int32(BTREE_DATA_VERSION) {
+			return tx.state.dataVer
+		}
+		if idx >= 0 && idx < int32(len(tx.state.meta)) {
+			return tx.state.meta[idx]
+		}
+		return 0
+	}
+	generation := bt.readGenerationLocked()
+	if generation == bt.generation {
+		if idx == int32(BTREE_DATA_VERSION) {
+			return bt.dataVer
+		}
+		if idx >= 0 && idx < int32(len(bt.meta)) {
+			return bt.meta[idx]
+		}
+		return 0
+	}
+	state := bt.stateAtGenerationLocked(generation)
 	if idx == int32(BTREE_DATA_VERSION) {
 		return state.dataVer
 	}
@@ -1635,6 +1955,7 @@ func (db *minweightDatabase) recomputeTableStats() error {
 		table.rowCount = 0
 		table.minRowid = 0
 		table.maxRowid = 0
+		table.maxKey = nil
 		db.tables[root] = table
 	}
 	corrupt := false
@@ -1684,6 +2005,9 @@ func (db *minweightDatabase) recomputeTableStats() error {
 				return false
 			}
 			table.rowCount++
+			if len(table.maxKey) == 0 || bytes.Compare(item.Key, table.maxKey) > 0 {
+				table.maxKey = append([]byte(nil), item.Key...)
+			}
 			db.tables[root] = table
 		}
 		return true
@@ -1713,8 +2037,8 @@ func minweightTableRowFromItem(root uint32, item minweight.Item) (minweightRow, 
 	}
 	return minweightRow{
 		rowid:    rowid,
-		storeKey: append([]byte(nil), item.Key...),
-		payload:  append([]byte(nil), item.Value...),
+		storeKey: item.Key,
+		payload:  item.Value,
 	}, true
 }
 
@@ -1725,65 +2049,156 @@ func minweightIndexRowFromItem(root uint32, item minweight.Item) (minweightRow, 
 	return minweightDecodeRow(item, false), true
 }
 
-func (bt *minweightBtree) indexOverlayCandidate(root uint32, target []byte, ge bool, strict bool) (minweightRow, bool) {
+func (bt *minweightBtree) indexOverlayCandidate(root uint32, target []byte, ge bool, strict bool) (minweightRow, bool, error) {
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
 	tx := bt.activeTxnLocked()
 	if tx == nil {
-		return minweightRow{}, false
+		return minweightRow{}, false, nil
 	}
-	var best minweightRow
-	found := false
-	for _, write := range tx.writes {
-		if write.deleted || !minweightIndexKeyInVersionedRange(root, write.key) {
-			continue
+	if !tx.hasWrites() {
+		return minweightRow{}, false, nil
+	}
+	overlay, err := tx.overlayStore()
+	if err != nil {
+		return minweightRow{}, false, err
+	}
+	if ge {
+		seekKey := append([]byte(nil), target...)
+		if strict {
+			seekKey = minweightIndexSeekAfter(seekKey)
 		}
-		cmp := bytes.Compare(write.key, target)
-		if ge {
-			if cmp < 0 || strict && cmp == 0 || found && bytes.Compare(write.key, best.storeKey) >= 0 {
+		upper := minweightVersionedIndexUpper(root)
+		for {
+			item, ok, err := overlay.SeekGE(seekKey)
+			if err != nil {
+				return minweightRow{}, false, err
+			}
+			if !ok || bytes.Compare(item.Key, upper) >= 0 || !minweightIndexKeyInVersionedRange(root, item.Key) {
+				return minweightRow{}, false, nil
+			}
+			write, ok := tx.writes[minweightLookupKeyString(item.Key)]
+			if !ok {
+				return minweightRow{}, false, minweightCorruptMetadata("missing overlay index write")
+			}
+			if write.deleted {
+				seekKey = minweightIndexSeekAfter(item.Key)
 				continue
 			}
-		} else if cmp > 0 || strict && cmp == 0 || found && bytes.Compare(write.key, best.storeKey) <= 0 {
-			continue
+			return minweightDecodeRow(minweight.Item{Key: write.key, Value: write.value}, false), true, nil
+		}
+	}
+	lower := minweightVersionedIndexLower(root)
+	var best minweightRow
+	found := false
+	var scanErr error
+	err = overlay.ReverseScanRange(target, minweightRootPrefix(root, false), func(item minweight.Item) bool {
+		if bytes.Compare(item.Key, lower) < 0 {
+			return false
+		}
+		if strict && bytes.Equal(item.Key, target) {
+			return true
+		}
+		if !minweightIndexKeyInVersionedRange(root, item.Key) {
+			return false
+		}
+		write, ok := tx.writes[minweightLookupKeyString(item.Key)]
+		if !ok {
+			scanErr = minweightCorruptMetadata("missing overlay index write")
+			return false
+		}
+		if write.deleted {
+			return true
 		}
 		best = minweightDecodeRow(minweight.Item{Key: write.key, Value: write.value}, false)
 		found = true
+		return false
+	})
+	if err != nil {
+		return minweightRow{}, false, err
 	}
-	return best, found
+	if scanErr != nil {
+		return minweightRow{}, false, scanErr
+	}
+	return best, found, nil
 }
 
-func (bt *minweightBtree) tableOverlayCandidate(root uint32, target int64, ge bool) (minweightRow, bool) {
+func (bt *minweightBtree) tableOverlayCandidate(root uint32, target int64, ge bool) (minweightRow, bool, error) {
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
 	tx := bt.activeTxnLocked()
 	if tx == nil {
-		return minweightRow{}, false
+		return minweightRow{}, false, nil
 	}
-	var best minweightRow
-	found := false
-	for _, write := range tx.writes {
-		if write.deleted {
-			continue
-		}
-		itemRoot, rowid, ok := minweightTableRootRowid(write.key)
-		if !ok || itemRoot != root {
-			continue
-		}
-		if ge {
-			if rowid < target || found && rowid >= best.rowid {
+	if !tx.hasWrites() {
+		return minweightRow{}, false, nil
+	}
+	overlay, err := tx.overlayStore()
+	if err != nil {
+		return minweightRow{}, false, err
+	}
+	seekKey := minweightTableKey(root, target)
+	if ge {
+		upper := minweightPrefixUpper(minweightRootPrefix(root, true))
+		for {
+			item, ok, err := overlay.SeekGE(seekKey)
+			if err != nil {
+				return minweightRow{}, false, err
+			}
+			if !ok || bytes.Compare(item.Key, upper) >= 0 {
+				return minweightRow{}, false, nil
+			}
+			itemRoot, rowid, ok := minweightTableRootRowid(item.Key)
+			if !ok || itemRoot != root {
+				return minweightRow{}, false, nil
+			}
+			write, ok := tx.writes[minweightLookupKeyString(item.Key)]
+			if !ok {
+				return minweightRow{}, false, minweightCorruptMetadata("missing overlay table write")
+			}
+			if write.deleted {
+				if rowid == math.MaxInt64 {
+					return minweightRow{}, false, nil
+				}
+				seekKey = minweightTableKey(root, rowid+1)
 				continue
 			}
-		} else if rowid > target || found && rowid <= best.rowid {
+			return minweightRow{
+				rowid:    rowid,
+				storeKey: append([]byte(nil), write.key...),
+				payload:  append([]byte(nil), write.value...),
+			}, true, nil
+		}
+	}
+	for {
+		item, ok, err := overlay.SeekLE(seekKey)
+		if err != nil {
+			return minweightRow{}, false, err
+		}
+		if !ok {
+			return minweightRow{}, false, nil
+		}
+		itemRoot, rowid, ok := minweightTableRootRowid(item.Key)
+		if !ok || itemRoot != root {
+			return minweightRow{}, false, nil
+		}
+		write, ok := tx.writes[minweightLookupKeyString(item.Key)]
+		if !ok {
+			return minweightRow{}, false, minweightCorruptMetadata("missing overlay table write")
+		}
+		if write.deleted {
+			if rowid == math.MinInt64 {
+				return minweightRow{}, false, nil
+			}
+			seekKey = minweightTableKey(root, rowid-1)
 			continue
 		}
-		best = minweightRow{
+		return minweightRow{
 			rowid:    rowid,
 			storeKey: append([]byte(nil), write.key...),
 			payload:  append([]byte(nil), write.value...),
-		}
-		found = true
+		}, true, nil
 	}
-	return best, found
 }
 
 func minweightBetterIndexGERow(a minweightRow, aOK bool, b minweightRow, bOK bool) (minweightRow, bool) {
@@ -1844,7 +2259,10 @@ func (bt *minweightBtree) noteSeekLERange(noResultLower []byte, upper []byte, ro
 
 func (bt *minweightBtree) seekIndexGE(root uint32, target []byte, strict bool) (minweightRow, bool, error) {
 	generation := bt.readGeneration()
-	overlayRow, overlayOK := bt.indexOverlayCandidate(root, target, true, strict)
+	overlayRow, overlayOK, err := bt.indexOverlayCandidate(root, target, true, strict)
+	if err != nil {
+		return minweightRow{}, false, err
+	}
 	historyRow, historyOK, err := bt.indexGenerationCandidate(root, target, true, strict, generation)
 	if err != nil {
 		return minweightRow{}, false, err
@@ -1869,6 +2287,13 @@ func (bt *minweightBtree) seekIndexGE(root uint32, target []byte, strict bool) (
 			bt.noteSeekGERange(readLower, upper, candidate, candidateOK)
 			return candidate, candidateOK, nil
 		}
+		if write, ok := bt.txnWriteForKey(item.Key); ok {
+			if write.deleted {
+				seekKey = minweightIndexSeekAfter(item.Key)
+				continue
+			}
+			item.Value = write.value
+		}
 		value, visible := bt.valueForStoreItemAtGeneration(item, generation)
 		if !visible {
 			seekKey = minweightIndexSeekAfter(item.Key)
@@ -1887,7 +2312,10 @@ func (bt *minweightBtree) seekIndexGE(root uint32, target []byte, strict bool) (
 
 func (bt *minweightBtree) seekIndexLE(root uint32, target []byte, strict bool) (minweightRow, bool, error) {
 	generation := bt.readGeneration()
-	overlayRow, overlayOK := bt.indexOverlayCandidate(root, target, false, strict)
+	overlayRow, overlayOK, err := bt.indexOverlayCandidate(root, target, false, strict)
+	if err != nil {
+		return minweightRow{}, false, err
+	}
 	historyRow, historyOK, err := bt.indexGenerationCandidate(root, target, false, strict, generation)
 	if err != nil {
 		return minweightRow{}, false, err
@@ -1907,6 +2335,12 @@ func (bt *minweightBtree) seekIndexLE(root uint32, target []byte, strict bool) (
 		}
 		if !minweightIndexKeyInVersionedRange(root, item.Key) {
 			return false
+		}
+		if write, ok := bt.txnWriteForKey(item.Key); ok {
+			if write.deleted {
+				return true
+			}
+			item.Value = write.value
 		}
 		value, visible := bt.valueForStoreItemAtGeneration(item, generation)
 		if !visible {
@@ -1934,7 +2368,10 @@ func (bt *minweightBtree) seekIndexLE(root uint32, target []byte, strict bool) (
 
 func (bt *minweightBtree) seekTableGE(root uint32, target int64) (minweightRow, bool, error) {
 	generation := bt.readGeneration()
-	overlayRow, overlayOK := bt.tableOverlayCandidate(root, target, true)
+	overlayRow, overlayOK, err := bt.tableOverlayCandidate(root, target, true)
+	if err != nil {
+		return minweightRow{}, false, err
+	}
 	historyRow, historyOK, err := bt.tableGenerationCandidate(root, target, true, generation)
 	if err != nil {
 		return minweightRow{}, false, err
@@ -1956,6 +2393,17 @@ func (bt *minweightBtree) seekTableGE(root uint32, target int64) (minweightRow, 
 		if !ok || itemRoot != root {
 			bt.noteSeekGERange(readLower, upper, candidate, candidateOK)
 			return candidate, candidateOK, nil
+		}
+		if write, ok := bt.txnWriteForKey(item.Key); ok {
+			if write.deleted {
+				if rowid == math.MaxInt64 {
+					bt.noteSeekGERange(readLower, upper, candidate, candidateOK)
+					return candidate, candidateOK, nil
+				}
+				seekKey = minweightTableKey(root, rowid+1)
+				continue
+			}
+			item.Value = write.value
 		}
 		value, visible := bt.valueForStoreItemAtGeneration(item, generation)
 		if !visible {
@@ -1979,7 +2427,10 @@ func (bt *minweightBtree) seekTableGE(root uint32, target int64) (minweightRow, 
 
 func (bt *minweightBtree) seekTableLE(root uint32, target int64) (minweightRow, bool, error) {
 	generation := bt.readGeneration()
-	overlayRow, overlayOK := bt.tableOverlayCandidate(root, target, false)
+	overlayRow, overlayOK, err := bt.tableOverlayCandidate(root, target, false)
+	if err != nil {
+		return minweightRow{}, false, err
+	}
 	historyRow, historyOK, err := bt.tableGenerationCandidate(root, target, false, generation)
 	if err != nil {
 		return minweightRow{}, false, err
@@ -2001,6 +2452,17 @@ func (bt *minweightBtree) seekTableLE(root uint32, target int64) (minweightRow, 
 		if !ok || itemRoot != root {
 			bt.noteSeekLERange(readLower, upper, candidate, candidateOK)
 			return candidate, candidateOK, nil
+		}
+		if write, ok := bt.txnWriteForKey(item.Key); ok {
+			if write.deleted {
+				if rowid == math.MinInt64 {
+					bt.noteSeekLERange(readLower, upper, candidate, candidateOK)
+					return candidate, candidateOK, nil
+				}
+				seekKey = minweightTableKey(root, rowid-1)
+				continue
+			}
+			item.Value = write.value
 		}
 		value, visible := bt.valueForStoreItemAtGeneration(item, generation)
 		if !visible {
@@ -2026,7 +2488,7 @@ func (bt *minweightBtree) clearAllItems() error {
 	bt.mu.Lock()
 	tx := bt.activeTxnLocked()
 	if tx != nil {
-		tx.writes = map[string]minweightTxnWrite{}
+		tx.resetWrites()
 	}
 	bt.mu.Unlock()
 	if tx != nil {
@@ -2034,10 +2496,11 @@ func (bt *minweightBtree) clearAllItems() error {
 		if err := bt.store.Scan(func(item minweight.Item) bool {
 			bt.mu.Lock()
 			if tx := bt.activeTxnLocked(); tx != nil {
-				tx.writes[string(item.Key)] = minweightTxnWrite{
-					key:     append([]byte(nil), item.Key...),
+				scanErr = tx.setWrite(minweightTxnWrite{
+					key:     item.Key,
 					deleted: true,
-				}
+					base:    true,
+				})
 			} else {
 				scanErr = errors.New("minweight sqlite transaction closed during clear")
 			}
@@ -2072,25 +2535,45 @@ func (bt *minweightBtree) noteInsert(root uint32, rowid int64, existed bool) {
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
 	bt.updateStateLocked(func(state *minweightDBState) {
-		table := state.tables[root]
-		if !existed {
-			table.rowCount++
-		}
-		if table.intKey && !existed {
-			if table.rowCount == 1 {
-				table.minRowid = rowid
-				table.maxRowid = rowid
-			} else {
-				if rowid < table.minRowid {
-					table.minRowid = rowid
-				}
-				if rowid > table.maxRowid {
-					table.maxRowid = rowid
-				}
-			}
+		minweightNoteInsertState(state, root, rowid, nil, existed)
+	})
+}
+
+func (bt *minweightBtree) noteInsertAndBumpDataVer(root uint32, rowid int64, key []byte, existed bool) {
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	bt.updateStateLocked(func(state *minweightDBState) {
+		minweightNoteInsertState(state, root, rowid, key, existed)
+		state.dataVer++
+	})
+}
+
+func minweightNoteInsertState(state *minweightDBState, root uint32, rowid int64, key []byte, existed bool) {
+	table := state.tables[root]
+	if !existed {
+		table.rowCount++
+	}
+	if !table.intKey {
+		if len(key) != 0 && (len(table.maxKey) == 0 || bytes.Compare(key, table.maxKey) > 0) {
+			table.maxKey = key
 		}
 		state.tables[root] = table
-	})
+		return
+	}
+	if !existed {
+		if table.rowCount == 1 {
+			table.minRowid = rowid
+			table.maxRowid = rowid
+		} else {
+			if rowid < table.minRowid {
+				table.minRowid = rowid
+			}
+			if rowid > table.maxRowid {
+				table.maxRowid = rowid
+			}
+		}
+	}
+	state.tables[root] = table
 }
 
 func (bt *minweightBtree) resetTableStats(root uint32) {
@@ -2101,6 +2584,7 @@ func (bt *minweightBtree) resetTableStats(root uint32) {
 		table.rowCount = 0
 		table.minRowid = 0
 		table.maxRowid = 0
+		table.maxKey = nil
 		state.tables[root] = table
 	})
 }
@@ -2141,20 +2625,30 @@ func (bt *minweightBtree) recomputeIntKeyStats(root uint32) error {
 	return nil
 }
 
-func (bt *minweightBtree) noteDelete(root uint32, row minweightRow, deleted bool, intKey bool) error {
+func (bt *minweightBtree) noteDeleteAndBumpDataVer(root uint32, row minweightRow, deleted bool, intKey bool) error {
 	if !deleted {
+		bt.bumpDataVer()
 		return nil
 	}
 	bt.mu.Lock()
-	state := bt.visibleStateLocked()
+	state := bt.mutableStateLocked()
+	if state == nil {
+		s := bt.stateLocked()
+		state = &s
+	}
 	table := state.tables[root]
 	if !intKey {
 		if table.rowCount > 0 {
 			table.rowCount--
 		}
-		bt.updateStateLocked(func(state *minweightDBState) {
-			state.tables[root] = table
-		})
+		if table.rowCount == 0 {
+			table.maxKey = nil
+		}
+		state.tables[root] = table
+		state.dataVer++
+		if bt.mutableStateLocked() == nil {
+			bt.applyStateLocked(*state)
+		}
 		bt.mu.Unlock()
 		return nil
 	}
@@ -2164,21 +2658,29 @@ func (bt *minweightBtree) noteDelete(root uint32, row minweightRow, deleted bool
 	if table.rowCount == 0 {
 		table.minRowid = 0
 		table.maxRowid = 0
-		bt.updateStateLocked(func(state *minweightDBState) {
-			state.tables[root] = table
-		})
+		state.tables[root] = table
+		state.dataVer++
+		if bt.mutableStateLocked() == nil {
+			bt.applyStateLocked(*state)
+		}
 		bt.mu.Unlock()
 		return nil
 	}
 	if row.rowid != table.minRowid && row.rowid != table.maxRowid {
-		bt.updateStateLocked(func(state *minweightDBState) {
-			state.tables[root] = table
-		})
+		state.tables[root] = table
+		state.dataVer++
+		if bt.mutableStateLocked() == nil {
+			bt.applyStateLocked(*state)
+		}
 		bt.mu.Unlock()
 		return nil
 	}
 	bt.mu.Unlock()
-	return bt.recomputeIntKeyStats(root)
+	if err := bt.recomputeIntKeyStats(root); err != nil {
+		return err
+	}
+	bt.bumpDataVer()
+	return nil
 }
 
 func (bt *minweightBtree) ensureSavepoints(n int32) error {
@@ -2473,7 +2975,7 @@ func (db *minweightDatabase) collectCommitChangeLocked(tx *minweightTxn, beforeS
 			keyChange.after = append([]byte(nil), write.value...)
 			keyChange.afterExists = true
 		}
-		change.keys[key] = keyChange
+		change.keys[minweightLookupKeyString(keyChange.key)] = keyChange
 		if root, ok := minweightKeyRoot(write.key); ok {
 			change.roots[root] = struct{}{}
 		}
@@ -2485,6 +2987,11 @@ func (db *minweightDatabase) publishCommitChangeLocked(change minweightCommitCha
 	db.generation++
 	change.generation = db.generation
 	db.changes = append(db.changes, change)
+	db.pruneCommitChangesLocked()
+}
+
+func (db *minweightDatabase) publishUntrackedCommitLocked() {
+	db.generation++
 	db.pruneCommitChangesLocked()
 }
 
@@ -2504,20 +3011,41 @@ func (bt *minweightBtree) commitActiveWriteTxn() error {
 	if bt.txnReadConflictLocked(tx, stateChanged) {
 		return errMinweightTxnConflict
 	}
-	change, err := bt.collectCommitChangeLocked(tx, beforeState, tx.state, stateChanged)
-	if err != nil {
-		return err
-	}
-	var batch minweight.WriteBatch
-	for _, key := range minweightTxnWriteKeys(tx.writes) {
-		write := tx.writes[key]
-		if write.deleted {
-			err = batch.Delete(write.key)
-		} else {
-			err = batch.Put(write.key, write.value)
-		}
+	trackChange := len(bt.pinnedViews) != 0
+	var change minweightCommitChange
+	var err error
+	if trackChange {
+		change, err = bt.collectCommitChangeLocked(tx, beforeState, tx.state, stateChanged)
 		if err != nil {
 			return err
+		}
+	}
+	var batch minweight.WriteBatch
+	if tx.hasDeleteWrite {
+		for _, write := range tx.writes {
+			if !write.deleted {
+				continue
+			}
+			err = batch.Delete(write.key)
+			if err != nil {
+				return err
+			}
+		}
+		for _, write := range tx.writes {
+			if write.deleted {
+				continue
+			}
+			err = batch.Put(write.key, write.value)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		for _, write := range tx.writes {
+			err = batch.Put(write.key, write.value)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	if bt.path != "" {
@@ -2529,7 +3057,11 @@ func (bt *minweightBtree) commitActiveWriteTxn() error {
 		return err
 	}
 	bt.applyStateLocked(tx.state)
-	bt.publishCommitChangeLocked(change)
+	if trackChange {
+		bt.publishCommitChangeLocked(change)
+	} else {
+		bt.publishUntrackedCommitLocked()
+	}
 	bt.txn = nil
 	return nil
 }
@@ -3020,7 +3552,7 @@ func (e *minweightStorageEngine) BtreeSavepoint(ctx BtreeContext, p BtreeHandle,
 			bt.mu.Lock()
 			if tx := bt.activeTxnLocked(); tx != nil {
 				tx.state = bt.stateLocked()
-				tx.writes = map[string]minweightTxnWrite{}
+				tx.resetWrites()
 				tx.savepoints = nil
 			}
 			bt.mu.Unlock()
@@ -3045,7 +3577,10 @@ func (e *minweightStorageEngine) BtreeSavepoint(ctx BtreeContext, p BtreeHandle,
 		return SQLITE_OK
 	}
 	tx.savepoints = tx.savepoints[:savepoint+1]
-	tx.restoreSavepoint(s)
+	if err := tx.restoreSavepoint(s); err != nil {
+		bt.mu.Unlock()
+		return minweightSQLiteError(err)
+	}
 	bt.mu.Unlock()
 	return SQLITE_OK
 }
@@ -3096,32 +3631,50 @@ func (e *minweightStorageEngine) BtreeInsert(ctx BtreeContext, pCur BtreeCursorH
 			return minweightSQLiteError(err)
 		}
 	}
-	existed := false
-	if !cur.intKey && (seekResult == 0 || flags&int32(BTREE_SAVEPOSITION) != 0) {
+	newKeyBaseExists := false
+	statsExisted := false
+	shouldProbeKey := seekResult == 0 || flags&int32(BTREE_SAVEPOSITION) != 0
+	if shouldProbeKey {
 		if row, ok := cur.current(); ok {
-			oldKey := minweightRowIndexStoreKey(cur.root, row)
-			if !bytes.Equal(oldKey, key) {
-				deleted, err := cur.btree.delete(oldKey)
-				if err != nil {
-					return minweightSQLiteError(err)
+			if cur.intKey {
+				if row.rowid == rowid {
+					newKeyBaseExists = true
+					statsExisted = true
 				}
-				existed = deleted
+				shouldProbeKey = false
+			} else {
+				oldKey := row.storeKey
+				if len(oldKey) == 0 {
+					oldKey = minweightRowIndexStoreKey(cur.root, row)
+				}
+				if bytes.Equal(oldKey, key) {
+					newKeyBaseExists = true
+					statsExisted = true
+				} else {
+					deleted, err := cur.btree.deleteKnownExisting(oldKey)
+					if err != nil {
+						return minweightSQLiteError(err)
+					}
+					statsExisted = deleted
+				}
 			}
 		}
 	}
-	_, keyExisted, err := cur.btree.get(key)
-	if err != nil {
-		return minweightSQLiteError(err)
+	if shouldProbeKey && !statsExisted {
+		_, keyExisted, err := cur.btree.get(key)
+		if err != nil {
+			return minweightSQLiteError(err)
+		}
+		newKeyBaseExists = keyExisted
+		statsExisted = keyExisted
 	}
-	existed = existed || keyExisted
-	if err := cur.btree.put(key, payload); err != nil {
+	if err := cur.btree.putOwnedWithBaseExists(key, payload, newKeyBaseExists); err != nil {
 		return minweightSQLiteError(err)
 	}
 	if cur.intKey {
 		e.invalidateIncrblobCursors(cur.btree, cur.root, rowid, false)
 	}
-	cur.btree.noteInsert(cur.root, rowid, existed)
-	cur.btree.bumpDataVer()
+	cur.btree.noteInsertAndBumpDataVer(cur.root, rowid, key, statsExisted)
 	return SQLITE_OK
 }
 
@@ -3178,14 +3731,13 @@ func (e *minweightStorageEngine) BtreeDelete(ctx BtreeContext, pCur BtreeCursorH
 	if cur.intKey {
 		e.invalidateIncrblobCursors(cur.btree, cur.root, row.rowid, false)
 	}
-	deleted, err := cur.btree.delete(key)
+	deleted, err := cur.btree.deleteKnownExisting(key)
 	if err != nil {
 		return minweightSQLiteError(err)
 	}
-	if err := cur.btree.noteDelete(cur.root, row, deleted, cur.intKey); err != nil {
+	if err := cur.btree.noteDeleteAndBumpDataVer(cur.root, row, deleted, cur.intKey); err != nil {
 		return minweightSQLiteError(err)
 	}
-	cur.btree.bumpDataVer()
 	return SQLITE_OK
 }
 
@@ -3269,6 +3821,7 @@ func (e *minweightStorageEngine) BtreeDropTable(ctx BtreeContext, p BtreeHandle,
 	autoVacuum := state.autoVacuum
 	lastRoot := state.next
 	movedTable := state.tables[lastRoot]
+	movedTable.maxKey = nil
 	if table.intKey {
 		e.invalidateIncrblobCursors(bt, root, 0, true)
 	}

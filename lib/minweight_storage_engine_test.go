@@ -123,6 +123,9 @@ func (h *minweightBtreeTestHarness) putIndexRecord(t *testing.T, root uint32, ke
 		table := state.tables[root]
 		table.intKey = false
 		table.rowCount++
+		if len(table.maxKey) == 0 || bytes.Compare(key, table.maxKey) > 0 {
+			table.maxKey = append([]byte(nil), key...)
+		}
 		state.tables[root] = table
 	})
 	h.bt.mu.Unlock()
@@ -513,13 +516,14 @@ func TestMinweightIndexCursorSeekMergesOverlay(t *testing.T) {
 
 func minweightIndexMovetoProbe(t *testing.T, h *minweightBtreeTestHarness, cursor BtreeCursorHandle, keyInfo uintptr, defaultRC int8, values ...minweightUnpackedTestValue) (int32, *TUnpackedRecord) {
 	t.Helper()
-	var res int32
+	res := new(int32)
 	probe, rec, mems, keepalive := minweightTestUnpackedRecord(keyInfo, defaultRC, values...)
-	if rc := h.engine.BtreeIndexMoveto(h.ctx, cursor, probe, BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&res))}); rc != SQLITE_OK {
+	resHandle := BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(res))}
+	if rc := h.engine.BtreeIndexMoveto(h.ctx, cursor, probe, resHandle); rc != SQLITE_OK {
 		t.Fatalf("BtreeIndexMoveto rc = %d, want SQLITE_OK", rc)
 	}
 	minweightKeepUnpackedRecordAlive(rec, mems, keepalive)
-	return res, rec
+	return resHandle.GetInt32(), rec
 }
 
 func minweightAssertIndexMovetoFound(t *testing.T, h *minweightBtreeTestHarness, cursor BtreeCursorHandle, record []byte, keyInfo uintptr, defaultRC int8, values ...minweightUnpackedTestValue) (int32, *TUnpackedRecord) {
@@ -527,6 +531,57 @@ func minweightAssertIndexMovetoFound(t *testing.T, h *minweightBtreeTestHarness,
 	res, rec := minweightIndexMovetoProbe(t, h, cursor, keyInfo, defaultRC, values...)
 	h.assertIndexCursorRecord(t, cursor, record)
 	return res, rec
+}
+
+func TestMinweightIndexReplaceKeepsNewKeyWriteBaseFalse(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	root := uint32(2)
+	h.bt.tables[root] = minweightTable{intKey: false}
+	keyInfo := minweightTestKeyInfo(t, h.tls, []string{"BINARY", "BINARY"}, nil)
+	oldRecord := minweightTestRecord(minweightTestTextRecord("a"), minweightTestIntRecord(1))
+	newRecord := minweightTestRecord(minweightTestTextRecord("b"), minweightTestIntRecord(1))
+	oldKey := h.putIndexRecord(t, root, keyInfo, oldRecord)
+	newKey, err := minweightIndexStoreKey(h.ctx, keyInfo, root, newRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor := h.indexCursor(t, root, keyInfo)
+	minweightAssertIndexMovetoFound(t, h, cursor, oldRecord, keyInfo, 0, minweightUnpackedText("a"), minweightUnpackedInt(1))
+
+	if rc, _ := h.bt.beginTrans(h.ctx, 1); rc != SQLITE_OK {
+		t.Fatalf("beginTrans rc = %d, want SQLITE_OK", rc)
+	}
+	payload := BtreePayload{
+		FnKey: Tsqlite3_int64(len(newRecord)),
+		FpKey: uintptr(unsafe.Pointer(&newRecord[0])),
+	}
+	if rc := h.engine.BtreeInsert(h.ctx, cursor, BtreePayloadHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&payload))}, int32(BTREE_SAVEPOSITION), 0); rc != SQLITE_OK {
+		t.Fatalf("BtreeInsert rc = %d, want SQLITE_OK", rc)
+	}
+
+	oldWrite, ok := h.bt.txnWriteForKey(oldKey)
+	if !ok || !oldWrite.deleted || !oldWrite.base {
+		t.Fatalf("old key write = %#v ok=%v, want committed-base tombstone", oldWrite, ok)
+	}
+	newWrite, ok := h.bt.txnWriteForKey(newKey)
+	if !ok || newWrite.deleted || newWrite.base {
+		t.Fatalf("new key write = %#v ok=%v, want new uncommitted put", newWrite, ok)
+	}
+	table, ok := h.bt.visibleTable(root)
+	if !ok || table.rowCount != 1 {
+		t.Fatalf("index row count = %d ok=%v, want 1", table.rowCount, ok)
+	}
+
+	deleted, err := h.bt.deleteKnownExisting(newKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deleted {
+		t.Fatal("deleteKnownExisting(newKey) = false, want true")
+	}
+	if write, ok := h.bt.txnWriteForKey(newKey); ok {
+		t.Fatalf("new key write after delete = %#v, want folded away", write)
+	}
 }
 
 func TestMinweightIndexMovetoUsesVersionedSeek(t *testing.T) {
@@ -579,14 +634,15 @@ func TestMinweightIndexMovetoUsesDescProbeSeek(t *testing.T) {
 	h.putIndexRecord(t, root, keyInfo, recordC)
 
 	cursor := h.indexCursor(t, root, keyInfo)
-	var res int32
+	res := new(int32)
+	resHandle := BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(res))}
 	probe, rec, mems, keepalive := minweightTestUnpackedRecord(keyInfo, 1, minweightUnpackedText("b"))
-	if rc := h.engine.BtreeIndexMoveto(h.ctx, cursor, probe, BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&res))}); rc != SQLITE_OK {
+	if rc := h.engine.BtreeIndexMoveto(h.ctx, cursor, probe, resHandle); rc != SQLITE_OK {
 		t.Fatalf("BtreeIndexMoveto DESC prefix rc = %d, want SQLITE_OK", rc)
 	}
 	h.assertIndexCursorRecord(t, cursor, recordB)
-	if res <= 0 {
-		t.Fatalf("DESC moveto prefix res = %d, want positive default_rc compare", res)
+	if got := resHandle.GetInt32(); got <= 0 {
+		t.Fatalf("DESC moveto prefix res = %d, want positive default_rc compare", got)
 	}
 	if rec.FeqSeen == 0 {
 		t.Fatal("DESC moveto prefix FeqSeen = 0, want equality seen")
@@ -594,12 +650,13 @@ func TestMinweightIndexMovetoUsesDescProbeSeek(t *testing.T) {
 	minweightKeepUnpackedRecordAlive(rec, mems, keepalive)
 
 	probe, rec, mems, keepalive = minweightTestUnpackedRecord(keyInfo, 0, minweightUnpackedText("b"), minweightUnpackedInt(2))
-	if rc := h.engine.BtreeIndexMoveto(h.ctx, cursor, probe, BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&res))}); rc != SQLITE_OK {
+	resHandle.PutInt32(0)
+	if rc := h.engine.BtreeIndexMoveto(h.ctx, cursor, probe, resHandle); rc != SQLITE_OK {
 		t.Fatalf("BtreeIndexMoveto DESC full key rc = %d, want SQLITE_OK", rc)
 	}
 	h.assertIndexCursorRecord(t, cursor, recordB)
-	if res != 0 {
-		t.Fatalf("DESC moveto full-key res = %d, want 0", res)
+	if got := resHandle.GetInt32(); got != 0 {
+		t.Fatalf("DESC moveto full-key res = %d, want 0", got)
 	}
 	if rec.FeqSeen == 0 {
 		t.Fatal("DESC moveto full-key FeqSeen = 0, want equality seen")
@@ -738,6 +795,7 @@ func TestMinweightCommitDetectsReadSetConflict(t *testing.T) {
 	if _, ok, err := h.bt.get(minweightTableKey(1, 1)); err != nil || !ok {
 		t.Fatalf("transaction read ok=%v err=%v, want existing row", ok, err)
 	}
+	minweightTrackTxnRead(t, h.bt, minweightTableKey(1, 1))
 	h.bt.changes = append(h.bt.changes, minweightCommitChange{
 		generation: 2,
 		keys: map[string]minweightCommittedKeyChange{
@@ -770,6 +828,7 @@ func TestMinweightBtreeCommitReturnsBusySnapshotOnReadConflict(t *testing.T) {
 	if _, ok, err := h.bt.get(readKey); err != nil || !ok {
 		t.Fatalf("transaction read ok=%v err=%v, want existing row", ok, err)
 	}
+	minweightTrackTxnRead(t, h.bt, readKey)
 	h.bt.changes = append(h.bt.changes, minweightCommitChange{
 		generation: 2,
 		keys: map[string]minweightCommittedKeyChange{
@@ -789,6 +848,17 @@ func TestMinweightBtreeCommitReturnsBusySnapshotOnReadConflict(t *testing.T) {
 	}
 
 	h.bt.releaseTrans()
+}
+
+func minweightTrackTxnRead(t *testing.T, bt *minweightBtree, key []byte) {
+	t.Helper()
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	tx := bt.activeTxnLocked()
+	if tx == nil {
+		t.Fatal("no active transaction")
+	}
+	tx.reads[string(key)] = struct{}{}
 }
 
 func TestMinweightCommitDetectsRangeReadConflict(t *testing.T) {

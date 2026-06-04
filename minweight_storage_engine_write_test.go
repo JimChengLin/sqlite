@@ -91,6 +91,46 @@ func TestMinweightStorageEngineUpsertReplaceMaintainsIndexes(t *testing.T) {
 	}
 }
 
+func TestMinweightStorageEngineComparableIndexKeyNocaseUpdate(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, db)
+
+	execMinweightSQL(t, db, `
+		CREATE TABLE items(
+			id INTEGER PRIMARY KEY,
+			name TEXT NOT NULL,
+			slug TEXT NOT NULL
+		);
+		CREATE INDEX items_name_nocase ON items(name COLLATE NOCASE);
+		CREATE UNIQUE INDEX items_slug_nocase ON items(slug COLLATE NOCASE);
+	`)
+	execMinweightSQL(t, db, "INSERT INTO items(id, name, slug) VALUES (1, 'alpha', 'one'), (2, 'ALPHA', 'two'), (3, 'bravo', 'three')")
+
+	wantAlpha := []string{"1:alpha", "2:ALPHA"}
+	if got := minweightQueryStrings(t, db, "SELECT printf('%d:%s', id, name) FROM items INDEXED BY items_name_nocase WHERE name = 'alpha' COLLATE NOCASE ORDER BY id"); !reflect.DeepEqual(got, wantAlpha) {
+		t.Fatalf("NOCASE duplicate-prefix rows = %v, want %v", got, wantAlpha)
+	}
+	if _, err := db.Exec("INSERT INTO items(id, name, slug) VALUES (4, 'delta', 'ONE')"); err == nil {
+		t.Fatal("NOCASE unique duplicate insert succeeded")
+	}
+
+	execMinweightSQL(t, db, "UPDATE items SET name = 'charlie', slug = 'uno' WHERE id = 1")
+	if got := minweightQueryStrings(t, db, "SELECT printf('%d:%s', id, name) FROM items INDEXED BY items_name_nocase WHERE name = 'alpha' COLLATE NOCASE ORDER BY id"); !reflect.DeepEqual(got, []string{"2:ALPHA"}) {
+		t.Fatalf("old NOCASE name index rows = %v, want only id 2", got)
+	}
+	if got := minweightQueryInt(t, db, "SELECT count(*) FROM items INDEXED BY items_slug_nocase WHERE slug = 'one' COLLATE NOCASE"); got != 0 {
+		t.Fatalf("old NOCASE slug index count = %d, want 0", got)
+	}
+	if got := minweightQueryInt(t, db, "SELECT id FROM items INDEXED BY items_slug_nocase WHERE slug = 'UNO' COLLATE NOCASE"); got != 1 {
+		t.Fatalf("new NOCASE slug lookup id = %d, want 1", got)
+	}
+}
+
 func TestMinweightStorageEngineForeignKeyCascadeAndTriggers(t *testing.T) {
 	installMinweightStorageEngineForTest(t)
 

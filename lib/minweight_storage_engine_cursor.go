@@ -6,7 +6,10 @@
 
 package sqlite3
 
-import "math"
+import (
+	"bytes"
+	"math"
+)
 
 func minweightCompareIndexKey(ctx BtreeContext, key []byte, pIdxKey uintptr) (int32, int32) {
 	if len(key) == 0 {
@@ -23,6 +26,27 @@ func minweightCompareIndexKey(ctx BtreeContext, key []byte, pIdxKey uintptr) (in
 		return cmp, SQLITE_CORRUPT
 	}
 	return cmp, SQLITE_OK
+}
+
+func minweightCompareIndexStoreKey(storeKey []byte, probeKey []byte, rec *TUnpackedRecord) (int32, bool) {
+	if rec.Fdefault_rc < 0 {
+		return 0, false
+	}
+	if bytes.HasPrefix(storeKey, probeKey) {
+		rec.FeqSeen = uint8(1)
+		return int32(rec.Fdefault_rc), true
+	}
+	if bytes.Compare(storeKey, probeKey) > 0 {
+		return 1, true
+	}
+	return 0, false
+}
+
+func minweightIndexProbeIsFull(rec *TUnpackedRecord) bool {
+	if rec.FpKeyInfo == 0 {
+		return false
+	}
+	return int(rec.FnField) == int(minweightKeyInfoFromPointer(rec.FpKeyInfo).FnAllField)
 }
 
 func (e *minweightStorageEngine) BtreeFirst(ctx BtreeContext, pCur BtreeCursorHandle, pRes BtreeMemoryHandle) (r int32) {
@@ -112,6 +136,28 @@ func (e *minweightStorageEngine) BtreeTableMoveto(ctx BtreeContext, pCur BtreeCu
 	if cur.faultCode != SQLITE_OK {
 		return cur.faultCode
 	}
+	if !cur.readTracked {
+		table, dataVer, ok := cur.btree.visibleTableAndDataVer(cur.root)
+		if ok && table.intKey && (table.rowCount == 0 || intKey > table.maxRowid) {
+			cur.clearCurrent()
+			cur.lastRow = minweightRow{rowid: intKey}
+			cur.hasLastRow = true
+			cur.dataVer = dataVer
+			minweightWriteResult(pRes, -1)
+			return SQLITE_OK
+		}
+		var key [13]byte
+		minweightTableKeyInto(key[:], cur.root, intKey)
+		payload, exact, err := cur.btree.get(key[:])
+		if err != nil {
+			return minweightSQLiteError(err)
+		}
+		if exact {
+			cur.setCurrent(minweightRow{rowid: intKey, payload: payload})
+			minweightWriteResult(pRes, 0)
+			return SQLITE_OK
+		}
+	}
 	row, ok, err := cur.btree.seekTableGE(cur.root, intKey)
 	if err != nil {
 		return minweightSQLiteError(err)
@@ -145,6 +191,29 @@ func (e *minweightStorageEngine) BtreeIndexMoveto(ctx BtreeContext, pCur BtreeCu
 	if err != nil {
 		return minweightSQLiteError(err)
 	}
+	beyondMax := cur.btree.indexProbeBeyondMax(cur.root, probeKey)
+	if minweightIndexProbeIsFull(rec) && rec.Fdefault_rc >= 0 {
+		payload, exact, err := cur.btree.get(probeKey)
+		if err != nil {
+			return minweightSQLiteError(err)
+		}
+		if exact {
+			rec.FeqSeen = uint8(1)
+			cmp := int32(rec.Fdefault_rc)
+			cur.setCurrent(minweightRow{
+				key:      payload,
+				storeKey: probeKey,
+				payload:  payload,
+			})
+			minweightWriteResult(pRes, cmp)
+			return SQLITE_OK
+		}
+	}
+	if beyondMax {
+		cur.clearCurrent()
+		minweightWriteResult(pRes, -1)
+		return SQLITE_OK
+	}
 	for {
 		row, ok, err := cur.btree.seekIndexGE(cur.root, probeKey, false)
 		if err != nil {
@@ -155,9 +224,13 @@ func (e *minweightStorageEngine) BtreeIndexMoveto(ctx BtreeContext, pCur BtreeCu
 			minweightWriteResult(pRes, -1)
 			return SQLITE_OK
 		}
-		cmp, rc := minweightCompareIndexKey(ctx, row.key, pIdxKey.ptr)
-		if rc != SQLITE_OK {
-			return rc
+		cmp, fast := minweightCompareIndexStoreKey(row.storeKey, probeKey, rec)
+		if !fast {
+			var rc int32
+			cmp, rc = minweightCompareIndexKey(ctx, row.key, pIdxKey.ptr)
+			if rc != SQLITE_OK {
+				return rc
+			}
 		}
 		if cmp >= 0 {
 			cur.setCurrent(row)

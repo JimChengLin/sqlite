@@ -275,31 +275,53 @@ func storageEngineForCursorHandle(pCur BtreeCursorHandle) StorageEngine {
 	if pCur.ptr == 0 {
 		return selectedStorageEngine()
 	}
-	storageEngineBinding.mu.RLock()
-	pBtree := storageEngineBinding.cursors[pCur.ptr]
-	storageEngineBinding.mu.RUnlock()
-	if pBtree != 0 {
-		return storageEngineForBtreeHandle(btreeHandle(pCur.tls, pBtree))
-	}
 	rawBtree := storageEngineBtCursorFromPointer(pCur.ptr).FpBtree
 	if rawBtree != 0 {
-		return storageEngineForBtreeHandle(btreeHandle(pCur.tls, rawBtree))
+		storageEngineBinding.mu.RLock()
+		binding := storageEngineBinding.btrees[rawBtree]
+		storageEngineBinding.mu.RUnlock()
+		if binding.engine != nil {
+			return binding.engine
+		}
+		return selectedStorageEngine()
 	}
+	storageEngineBinding.mu.RLock()
+	pBtree := storageEngineBinding.cursors[pCur.ptr]
+	if pBtree != 0 {
+		binding := storageEngineBinding.btrees[pBtree]
+		storageEngineBinding.mu.RUnlock()
+		if binding.engine != nil {
+			return binding.engine
+		}
+		return selectedStorageEngine()
+	}
+	storageEngineBinding.mu.RUnlock()
 	return selectedStorageEngine()
 }
 
 func storageEngineForCursorOrDB(pCur BtreeCursorHandle, db SQLiteHandle) StorageEngine {
 	if pCur.ptr != 0 {
-		storageEngineBinding.mu.RLock()
-		pBtree := storageEngineBinding.cursors[pCur.ptr]
-		storageEngineBinding.mu.RUnlock()
-		if pBtree != 0 {
-			return storageEngineForBtreeHandle(btreeHandle(pCur.tls, pBtree))
-		}
 		rawBtree := storageEngineBtCursorFromPointer(pCur.ptr).FpBtree
 		if rawBtree != 0 {
-			return storageEngineForBtreeHandle(btreeHandle(pCur.tls, rawBtree))
+			storageEngineBinding.mu.RLock()
+			binding := storageEngineBinding.btrees[rawBtree]
+			storageEngineBinding.mu.RUnlock()
+			if binding.engine != nil {
+				return binding.engine
+			}
+			return selectedStorageEngine()
 		}
+		storageEngineBinding.mu.RLock()
+		pBtree := storageEngineBinding.cursors[pCur.ptr]
+		if pBtree != 0 {
+			binding := storageEngineBinding.btrees[pBtree]
+			storageEngineBinding.mu.RUnlock()
+			if binding.engine != nil {
+				return binding.engine
+			}
+			return selectedStorageEngine()
+		}
+		storageEngineBinding.mu.RUnlock()
 	}
 	return storageEngineForDB(db)
 }

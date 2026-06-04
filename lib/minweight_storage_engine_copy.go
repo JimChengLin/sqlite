@@ -25,7 +25,7 @@ func minweightCopySourceItems(src *minweightBtree, writes map[string]minweightTx
 		if bytes.Equal(item.Key, minweightMetaKey) {
 			return true
 		}
-		if _, ok := writes[string(item.Key)]; ok {
+		if _, ok := writes[minweightLookupKeyString(item.Key)]; ok {
 			return true
 		}
 		putErr = put(item.Key, item.Value)
@@ -55,16 +55,16 @@ func (bt *minweightBtree) setTxnWrite(write minweightTxnWrite) error {
 	if tx == nil {
 		return errors.New("minweight sqlite transaction closed during copy")
 	}
-	tx.writes[string(write.key)] = write
-	return nil
+	return tx.setWrite(write)
 }
 
 func (bt *minweightBtree) copyIntoActiveTxn(src *minweightBtree, writes map[string]minweightTxnWrite) error {
 	var writeErr error
 	if err := bt.store.Scan(func(item minweight.Item) bool {
 		writeErr = bt.setTxnWrite(minweightTxnWrite{
-			key:     append([]byte(nil), item.Key...),
+			key:     item.Key,
 			deleted: true,
+			base:    true,
 		})
 		return writeErr == nil
 	}); err != nil {
@@ -75,8 +75,8 @@ func (bt *minweightBtree) copyIntoActiveTxn(src *minweightBtree, writes map[stri
 	}
 	return minweightCopySourceItems(src, writes, func(key, value []byte) error {
 		return bt.setTxnWrite(minweightTxnWrite{
-			key:   append([]byte(nil), key...),
-			value: append([]byte(nil), value...),
+			key:   key,
+			value: value,
 		})
 	})
 }

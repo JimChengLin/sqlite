@@ -54,8 +54,14 @@ func (c *minweightCursor) markCorrupt() {
 }
 
 func (e *minweightStorageEngine) invalidateIncrblobCursors(bt *minweightBtree, root uint32, rowid int64, clearTable bool) {
+	if e.incrblobCursors.Load() == 0 {
+		return
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.incrblobCursors.Load() == 0 {
+		return
+	}
 	for _, cur := range e.cursors {
 		if !cur.incrblob || cur.incrblobInvalid || !cur.intKey {
 			continue
@@ -249,7 +255,7 @@ func (e *minweightStorageEngine) BtreeCursor(ctx BtreeContext, p BtreeHandle, iT
 		readTracked: readTracked,
 	}
 	e.mu.Lock()
-	e.cursors[pCur.ptr] = cur
+	rawCursor.FpBt = e.registerCursorLocked(pCur.ptr, cur)
 	e.mu.Unlock()
 	return SQLITE_OK
 }
@@ -263,10 +269,14 @@ func (e *minweightStorageEngine) BtreeCursorZero(ctx BtreeContext, p BtreeCursor
 }
 
 func (e *minweightStorageEngine) BtreeCloseCursor(ctx BtreeContext, pCur BtreeCursorHandle) (r int32) {
+	rawCursor := minweightBtCursorFromPointer(pCur.ptr)
 	e.mu.Lock()
-	cur := e.cursors[pCur.ptr]
-	delete(e.cursors, pCur.ptr)
+	cur := e.unregisterCursorLocked(pCur.ptr, rawCursor.FpBt)
+	if cur != nil && cur.incrblob {
+		e.incrblobCursors.Add(-1)
+	}
 	e.mu.Unlock()
+	rawCursor.FpBt = 0
 	if cur != nil {
 		if cur.readTracked {
 			cur.btree.releaseReader()
@@ -408,9 +418,25 @@ func (e *minweightStorageEngine) BtreePutData(ctx BtreeContext, pCsr BtreeCursor
 }
 
 func (e *minweightStorageEngine) BtreeIncrblobCursor(ctx BtreeContext, pCur BtreeCursorHandle) {
-	cur := e.cursor(pCur)
-	cur.incrblob = true
-	minweightBtCursorFromPointer(pCur.ptr).FcurFlags |= uint8(BTCF_Incrblob)
+	rawCursor := minweightBtCursorFromPointer(pCur.ptr)
+	e.mu.Lock()
+	var cur *minweightCursor
+	if rawCursor.FpBt != 0 && int(rawCursor.FpBt) < len(e.cursorSlots) {
+		cur = e.cursorSlots[rawCursor.FpBt]
+	}
+	if cur == nil {
+		cur = e.cursors[pCur.ptr]
+	}
+	if cur == nil {
+		e.mu.Unlock()
+		panic("sqlite minweight storage engine: unknown cursor handle")
+	}
+	if !cur.incrblob {
+		cur.incrblob = true
+		e.incrblobCursors.Add(1)
+	}
+	e.mu.Unlock()
+	rawCursor.FcurFlags |= uint8(BTCF_Incrblob)
 }
 
 func (e *minweightStorageEngine) BtreeCursorHasHint(ctx BtreeContext, pCsr BtreeCursorHandle, mask uint32) (r int32) {

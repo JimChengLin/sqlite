@@ -283,7 +283,7 @@ func (c *minweightIntegrityCheck) writeShadows(key []byte) bool {
 	if len(c.writes) == 0 {
 		return false
 	}
-	_, ok := c.writes[string(key)]
+	_, ok := c.writes[minweightLookupKeyString(key)]
 	return ok
 }
 

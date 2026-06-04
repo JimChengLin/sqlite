@@ -42,7 +42,7 @@ func (bt *minweightBtree) valueForKeyAtGeneration(key []byte, generation uint64)
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
 	if tx := bt.activeTxnLocked(); tx != nil {
-		if _, ok := tx.writes[string(key)]; ok {
+		if _, ok := tx.writes[minweightLookupKeyString(key)]; ok {
 			return nil, false, nil
 		}
 	}
@@ -54,7 +54,7 @@ func (bt *minweightBtree) valueForStoreItemAtGeneration(item minweight.Item, gen
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
 	if tx := bt.activeTxnLocked(); tx != nil {
-		if _, ok := tx.writes[string(item.Key)]; ok {
+		if _, ok := tx.writes[minweightLookupKeyString(item.Key)]; ok {
 			return nil, false
 		}
 	}
@@ -64,6 +64,9 @@ func (bt *minweightBtree) valueForStoreItemAtGeneration(item minweight.Item, gen
 func (bt *minweightBtree) changedKeysAfterGeneration(generation uint64) [][]byte {
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
+	if generation == bt.generation || len(bt.changes) == 0 {
+		return nil
+	}
 	var txWrites map[string]minweightTxnWrite
 	if tx := bt.activeTxnLocked(); tx != nil {
 		txWrites = tx.writes

@@ -86,7 +86,7 @@ func TestMinweightBtreeCopyFileUsesSourceOverlayAndTargetTxn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := src.noteDelete(1, minweightRow{rowid: 1}, deleted, true); err != nil {
+	if err := src.noteDeleteAndBumpDataVer(1, minweightRow{rowid: 1}, deleted, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := src.put(minweightTableKey(1, 2), []byte("two-updated")); err != nil {

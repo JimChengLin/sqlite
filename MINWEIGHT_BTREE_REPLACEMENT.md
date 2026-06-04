@@ -86,7 +86,7 @@ minweight 实现在 `lib/minweight_storage_engine.go`。核心对象有三层：
 - 单个 SQLite open btree handle。
 - 指向一个 `minweightDatabase`。
 - 保存 fake pager/file/journal 指针、SQLite db 指针、readonly/shared-cache 状态。
-- 写事务期间保存 per-writer overlay、working metadata、savepoint/statement rollback 状态；后续需要补短生命周期 statement/read-cursor generation pin 和读写集检测，显式长读事务先保持 unsupported。
+- 写事务期间保存 per-writer write map、懒创建的 ordered overlay、working metadata、savepoint/statement rollback 状态；后续需要补短生命周期 statement/read-cursor generation pin 和读写集检测，显式长读事务先保持 unsupported。
 
 ## 打开数据库
 
@@ -156,7 +156,7 @@ value = SQLite index record bytes
 当前读操作大致如下：
 
 - `BtreeFirst` / `BtreeLast` / `BtreeTableMoveto` 以及普通 `BtreeNext` / `BtreePrevious` 已经使用 seek/range API。
-- `BtreeIndexMoveto` 使用 sortable probe key 和 `SeekGE`，并 merge 当前 writer overlay。
+- `BtreeIndexMoveto` 使用 sortable probe key 定位。完整 key 优先 exact `Get`，probe 已超过 root max key 时直接返回 miss；其它 prefix/range probe 才走 `SeekGE` 并 merge 当前 writer overlay。
 - int-key table 按 rowid 排序。
 - `BtreeIndexMoveto` 的最终 compare result 仍来自 SQLite record comparator，避免 adapter 自己重新定义 SQLite record 比较语义。
 - `BtreePayload` / `BtreePayloadFetch` 把当前 row 的 payload 写回 SQLite 期待的内存位置。
@@ -196,12 +196,64 @@ minweight_store 未来可以提供长期 iterator；如果有长期 iterator，a
 
 当前写入入口不再直接落到 committed minweight store。写事务开始后：
 
-- `BtreeInsert` / `BtreeDelete` / `BtreePutData` 写入 per-writer overlay。
+- `BtreeInsert` / `BtreeDelete` / `BtreePutData` 写入 per-writer write map。ordered overlay 只在当前事务需要 range cursor movement 时懒创建。
 - `BtreeCreateTable` / `BtreeDropTable` / `BtreeClearTable` / `BtreeUpdateMeta` 修改 writer 的 working metadata。
-- savepoint 和 statement rollback 保存/恢复 overlay 与 working metadata。
-- `BtreeCommitPhaseTwo` 把 overlay delta 转成一个 `minweight.Store.WriteBatch`，再一次性发布到 committed store；path-backed store 的逻辑 metadata 同批写入内部 meta key。
+- savepoint 和 statement rollback 保存/恢复 write map、ordered overlay 与 working metadata。
+- `BtreeCommitPhaseTwo` 把 write map delta 转成一个 `minweight.Store.WriteBatch`，再一次性发布到 committed store；path-backed store 的逻辑 metadata 同批写入内部 meta key。
 
 写完会更新 table row count、min/max rowid、root 分配状态、`dataVer` 等逻辑状态。incremental blob cursor 会在相关 row 被替换、删除、清表或 drop table 时失效。
+
+### 当前性能 checkpoint
+
+2026-06-04 的 OLTP 诊断确认：`minweight_store` 本体不是主要瓶颈。直接 path-backed core 可以在几十毫秒内批写 60k 个 table/index-like entry，点读和 `SeekGE` 也在百万 ops/s 量级。此前 SQL bulk insert 慢到秒级的主因是 adapter 写事务 overlay seek：`indexOverlayCandidate` / `tableOverlayCandidate` 每次 cursor seek 都遍历整个 `tx.writes`，导致大事务插入接近 `O(n^2)`。
+
+当前代码已经把 write set exact lookup map 和有序 overlay 分开：
+
+- `tx.writes map[string]minweightTxnWrite` 保留给 exact lookup、commit、read/write conflict bookkeeping。
+- `tx.overlay *minweight.Store` 是懒创建的内存 minweight store，保存当前事务改过的 key，用于 table/index root 的 `SeekGE` / `SeekLE` overlay merge；纯 exact lookup / append 写事务不应该主动创建它。
+- savepoint / statement rollback 会恢复 write map 并重建 overlay，避免 map 和有序 overlay 分叉。
+- committed store seek 命中当前事务 tombstone 时会跳过，命中当前事务 overwrite 时使用 overlay value。
+
+这把 bulk insert 规模曲线从近二次拉回接近线性。随后 root stats 又补了两类写入 fast path：monotonic table append 可以用 `maxRowid` 直接返回 table moveto miss，index probe 超过 non-int-key root 的 `maxKey` 时可以直接返回 index miss；这避免 bulk insert 为查重/定位创建 ordered overlay。当前 `tools/minweight_oltp_bench` 的本机结果显示：PK/二级索引点读、mixed small transaction 已经快于 native btree；bulk insert、update、upsert 仍慢于 native，但已经从十几秒/几十秒级降到亚秒级。
+
+已经完成的热路径优化：
+
+- `BtreeInsert` 在 SQLite 传入非零 `seekResult` 时信任“相邻定位、key 不存在”的语义，跳过额外 exact `bt.get(key)`；可能 overwrite 的路径仍然查存在性。
+- writable table cursor 的 `BtreeTableMoveto` 先做 exact rowid lookup，命中后不再 `SeekGE`；read-tracked cursor 保持 seek 路径，避免破坏 pinned-reader / incrblob 边界。
+- `visibleDataVer` / `visibleTable` / `visibleMeta` 对当前 generation 直接读字段，不再为了单个值 clone 整个 metadata state。
+- commit 在没有 pinned reader 时不再为每个 write key 重新 `store.Get` 构造 before/after history；这种单连接 OLTP 常见路径只发布 `WriteBatch` 和新 generation。有 pinned reader 时仍保留旧版本 before image。
+- versioned index 物理 key 已从 `comparable fields + full-record suffix` 缩成纯 SQLite-comparable fields，value 保留原始 SQLite record；full-key `BtreeIndexMoveto` probe 可以 exact `Get`，prefix/range probe 仍走 `SeekGE` 并在需要时调用 `_sqlite3VdbeRecordCompare`。
+- read-range tracking 直接接管 seek 函数生成的边界，不再二次 clone；versioned index range check 也简化为 root/version prefix check。
+- transaction write 记录带 `base` 标记，同一事务内 insert 后又 delete 的 key 可以从 write set / ordered overlay 中移除，避免把纯事务内中间态提交成 tombstone。
+- SQL `BtreeInsert` 使用 owned-write 入口：`KeyBytes` / `DataBytes` 已经把 SQLite payload copy 到 Go memory，普通 helper 仍保留 caller-owned copy 语义；delete stats/data version 更新在 active transaction 里直接改 `tx.state`，不再 clone visible metadata。
+- 写事务 hot path 不再给每次 point read 自动填充 `tx.reads`。当前协议是严格 single-writer，普通 SQL 写事务期间不会有另一个 writer 提交；读集冲突检测函数仍保留，但测试直接构造 read set，而不是让 UPDATE 为每个 base lookup 付出 string/map 分配。
+- `BtreeInsert` 在当前 cursor 已经指向同一个物理 key 时直接认定 existed，避免 UPDATE replace 同一 row/index entry 时再次 exact `Get`；`BtreeDelete` 在 cursor 当前项证明 key 已存在时走 known-existing delete，避免删除旧 index entry 前再查 committed store。
+- `BtreeInsert` 替换旧 index key 时拆开两个语义：旧 key 删除结果只用于 root row-count 统计，新 key 的事务 `base` 状态只表示新 key 自己是否来自 committed base。这样当前事务中新建的 index key 继续保持 `base=false`，后续重复 update 可以折叠中间态，而不是留下伪 tombstone。
+- `minweightComparableMemKey` 构造 probe key 时对 SQLite `Mem` 字节使用临时 view，最终 sortable key 仍写入自己的 buffer，避免 BINARY/RTRIM 文本和 blob probe 的一次额外 payload copy。
+- comparable-key builder 现在把每个字段直接 append 到最终 key buffer，不再为每个字段先分配临时 `fieldKey`；indexed-column UPDATE profile 里 `minweightComparableIndexProbeKey` 已经从明显热点降成尾部成本。
+- transaction write-map key 绑定到已拥有的 `write.key` backing array；savepoint clone 和 commit-history clone 会重新绑定到 clone 后的 key，避免热路径 `string(write.key)` 拷贝，同时不留下悬挂 backing array。
+- `setWriteOwned` 只有在本次 write 的 `base=false` 时才查 previous write；`base=true` 的 table overwrite / base tombstone 不再为保留 base provenance 多做一次 map lookup。
+- known-existing delete 直接使用 cursor 当前项已经拥有的 `storeKey` 写 tombstone，不再先 clone 旧 index key 再让 `setWrite` clone 第二次。
+- cursor dispatch 仍保持 `cursor -> btree -> engine` handle graph；cursor-bound 调用优先读取 `BtCursor.FpBtree` 直接解析 btree binding，只有 raw btree 缺失时才回退 cursor map。minweight engine 自己的 cursor/btree map 查找使用 RWMutex read path。
+- minweight cursor lookup 使用 `BtCursor.FpBt` 保存 1-based cursor slot id；真实 Go cursor 对象仍由 engine slice/map 持有，不把 Go 指针塞进 SQLite ABI `uintptr`。普通 cursor-bound btree call 可以先用 slot 做数组 lookup，再回退到 cursor map；cursor map 继续保留给 incrblob invalidation 和 trip-cursor 扫描。
+- 普通 no-incrblob table write 先用 atomic cursor count 判断是否需要 invalidation；没有 incremental blob cursor 时不再拿 engine cursor-map 锁。
+- commit 把 write map 的最终态转成 `WriteBatch` 时先写 tombstone delete，再写 final put。不同 key 之间没有 SQLite 语义顺序要求；delete-first 让 minweight/minpatricia 先移除旧二级索引项，再安装最终 table/index record，降低大 UPDATE 提交阶段成本。
+- 当前 generation 的 `bt.get` / seek 路径直接复用 minweight_store 已经返回的 owned value；只有 commit-history before image 仍 clone。这去掉了 table moveto 和 cursor seek 的一次额外 payload copy。
+- `minweightDecodeRow` / table row decode 现在接管 minweight item 的 owned key/value，不再为每个 seek row 再 clone 一份 cursor row。
+- indexed-column UPDATE 中 `BtreeInsert` 替换旧 index key 时，当前 cursor 已经证明旧 key 存在，因此走 known-existing delete，不再用普通 delete 回查 committed store。长 profile 中 `BtreeInsert -> get` 已从主要热点降到小头。
+- SQL 层新增 NOCASE comparable-key 覆盖：非唯一 NOCASE index 的 duplicate normalized prefix 不会互相覆盖，NOCASE UNIQUE 仍拒绝等价值，更新后旧索引项消失、新索引项可 forced-index 查到。
+
+已证伪、不要重复的优化：
+
+- 大事务 pure-Put commit 前按 physical key 排序再构造 `minweight.Store.WriteBatch`。这个实验已经跑过不止一次：排序会增加 adapter 侧 sort/alloc 成本，且没有降低 end-to-end OLTP 中位数。2026-06-04 复测中，`bulk_insert_tx` minweight 中位数从当前基线约 `111.9ms` 变成约 `120.7ms`，`update_by_pk_tx` 和 `upsert_by_pk_tx` 也更慢。除非 `minweight_store.WriteBatch` / `minpatricia` apply 语义改变，否则不要再尝试这个方向。
+- 复用 transaction ordered overlay 不是当前 bulk insert 的主线。2026-06-04 默认 debug report 的 10k rows bulk breakdown 显示：native insert loop `32.764917ms`，minweight insert loop `33.237916ms`；native commit `2.87125ms`，minweight commit `29.108959ms`。差距集中在 commit，profile 指向 `minweight_store.WriteBatch` / `minpatricia` apply，而不是 `tx.overlay.Put`。因此 bulk insert 后续不要优先做 overlay reuse，除非新的 profile 重新显示 overlay 是热点。
+- 复用 `minweightCursor` Go object 的 cursor pool。这个实验会碰 cursor 生命周期边界：`TestMinweightIncrblobCursorInvalidatedByClearTable` 直接失败，`BtreeClearTable` changes 从 `1` 变成 `0`。保留 cursor slot id 这种 lookup 优化可以，但不要在没有更完整 cursor ownership 设计前回收/复用 cursor 对象本身。
+
+下一步优先级：
+
+- update/upsert 大事务的 index `SeekGE` 大头已经被 full-key exact lookup 打掉；`pprof` 确认 raw minweight KV 只占小头，剩余主要是 SQLite VDBE、`BtreeInsert`、exact base lookup、SQLite record-to-comparable-key 编码和 adapter 分配/GC。
+- write-set churn 还要继续降：重复二级索引 update 应该尽量保持最终态，减少中间 tombstone；同时继续避免给每次 delete 增加 committed-store read。还要继续扩大 SQL/collation 覆盖，确认纯 comparable key 物理格式在 RTRIM、numeric 等价、DESC、WITHOUT ROWID 等边界上都保持 SQLite btree 顺序。
+- read-tracked table cursor 也有 exact-hit 优化空间，但必须先把 pinned generation 和 incrblob/clear-table 语义测清楚，不能把普通 read cursor 直接切到 bypass seek 的路径。
 
 ## 事务和锁
 
