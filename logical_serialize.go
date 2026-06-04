@@ -513,7 +513,14 @@ func logicalSerializeTable(c *conn, name string) (logicalSerializedTable, error)
 	if name == logicalSQLiteSequenceTable {
 		return logicalSerializeSQLiteSequence(c)
 	}
-	columns, rows, err := logicalSerializeQuery(c, "SELECT * FROM "+quoteIdent(name))
+	allColumns, insertColumns, err := logicalTableColumnNames(c, name)
+	if err != nil {
+		return logicalSerializedTable{}, err
+	}
+	if len(insertColumns) == 0 {
+		return logicalSerializedTable{}, fmt.Errorf("sqlite: serialize table %s has no insertable columns", name)
+	}
+	columns, rows, err := logicalSerializeQuery(c, "SELECT "+quoteIdentList(insertColumns)+" FROM "+quoteIdent(name))
 	if err != nil {
 		return logicalSerializedTable{}, err
 	}
@@ -523,11 +530,11 @@ func logicalSerializeTable(c *conn, name string) (logicalSerializedTable, error)
 		return logicalSerializedTable{}, err
 	}
 	if !withoutRowid {
-		rowidColumn := logicalHiddenRowidColumn(columns)
+		rowidColumn := logicalHiddenRowidColumn(allColumns)
 		if rowidColumn == "" {
 			return logicalSerializedTable{}, fmt.Errorf("sqlite: serialize table %s shadows all rowid aliases", name)
 		}
-		rowidColumns, rowidRows, rowidErr := logicalSerializeQuery(c, "SELECT "+rowidColumn+" AS __minweight_rowid__, * FROM "+quoteIdent(name)+" ORDER BY "+rowidColumn)
+		rowidColumns, rowidRows, rowidErr := logicalSerializeQuery(c, "SELECT "+rowidColumn+" AS __minweight_rowid__, "+quoteIdentList(insertColumns)+" FROM "+quoteIdent(name)+" ORDER BY "+rowidColumn)
 		if rowidErr != nil {
 			return logicalSerializedTable{}, rowidErr
 		}
@@ -549,6 +556,30 @@ func logicalSerializeTable(c *conn, name string) (logicalSerializedTable, error)
 		table.Rows = append(table.Rows, serialized)
 	}
 	return table, nil
+}
+
+func logicalTableColumnNames(c *conn, name string) ([]string, []string, error) {
+	rows, err := logicalBackupQuery(c, "PRAGMA table_xinfo("+quoteIdent(name)+")")
+	if err != nil {
+		return nil, nil, err
+	}
+	all := make([]string, 0, len(rows))
+	insertable := make([]string, 0, len(rows))
+	for _, row := range rows {
+		column, ok := row[1].(string)
+		if !ok {
+			return nil, nil, fmt.Errorf("sqlite: table_xinfo column name for %s is %T", name, row[1])
+		}
+		hidden, ok := row[6].(int64)
+		if !ok {
+			return nil, nil, fmt.Errorf("sqlite: table_xinfo hidden flag for %s.%s is %T", name, column, row[6])
+		}
+		all = append(all, column)
+		if hidden == 0 {
+			insertable = append(insertable, column)
+		}
+	}
+	return all, insertable, nil
 }
 
 func logicalSerializeSQLiteSequence(c *conn) (logicalSerializedTable, error) {

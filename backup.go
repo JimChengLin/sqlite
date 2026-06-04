@@ -449,21 +449,29 @@ func logicalBackupSynthCreateTable(src *conn, table string) (string, error) {
 	return "CREATE TABLE " + quoteIdent(table) + " (" + strings.Join(cols, ", ") + ")", nil
 }
 
-func logicalBackupCopyTable(src *conn, dst *conn, table string) error {
+func logicalBackupCopyTable(src *conn, dst *conn, table string) (err error) {
 	if table == logicalSQLiteSequenceTable {
 		return logicalBackupCopySQLiteSequence(src, dst)
 	}
-	r, err := src.query(context.Background(), "SELECT * FROM "+quoteIdent(table), nil)
+	_, columns, err := logicalTableColumnNames(src, table)
 	if err != nil {
 		return err
 	}
-	defer r.Close()
-	cols := r.Columns()
-	if len(cols) == 0 {
-		return nil
+	if len(columns) == 0 {
+		return fmt.Errorf("sqlite: backup table %s has no insertable columns", table)
 	}
-	insert := "INSERT INTO " + quoteIdent(table) + " VALUES (" + strings.TrimRight(strings.Repeat("?,", len(cols)), ",") + ")"
-	values := make([]driver.Value, len(cols))
+	columnList := quoteIdentList(columns)
+	r, err := src.query(context.Background(), "SELECT "+columnList+" FROM "+quoteIdent(table), nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := r.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	insert := "INSERT INTO " + quoteIdent(table) + " (" + columnList + ") VALUES (" + strings.TrimRight(strings.Repeat("?,", len(columns)), ",") + ")"
+	values := make([]driver.Value, len(columns))
 	for {
 		if err := r.Next(values); err != nil {
 			if err == io.EOF {

@@ -101,6 +101,7 @@ Last updated: 2026-06-04.
 - Cleaned the changed `./lib` lint surface. `golangci-lint run ./lib --timeout 5m` and `golangci-lint run ./lib --enable-only=gocyclo,funlen --new --timeout 5m` are the routine gates for this branch. A full historical `gocyclo,funlen` run still reports historical long/complex minweight functions and old tests; track those as planned refactors instead of re-running them after every narrow edit.
 - File size is not covered by the current golangci-lint gates. Keep `lib/minweight_storage_engine.go` on the explicit refactor list and split it by ownership boundary instead of assuming lint will catch it.
 - Preserved `sqlite_sequence` data through minweight logical `Serialize`/`Deserialize` and logical `Backup`. AUTOINCREMENT tables with no current rows now keep their advanced sequence value, so the next inserted rowid continues after the source sequence instead of restarting from 1.
+- Preserved generated-column tables through minweight logical `Serialize`/`Deserialize` and logical `Backup`. Logical row copy now uses `PRAGMA table_xinfo` to insert only writable columns while replayed schema SQL keeps STORED and VIRTUAL generated expressions intact.
 
 ## Focused Test Policy
 
@@ -112,9 +113,9 @@ Default per-turn minweight quick gate, target under 30s:
 ./test-minweight.sh quick
 ```
 
-Latest quick run: 6.07s on 2026-06-04 with `TEST_PARALLEL=8`.
+Latest quick run: 6.70s on 2026-06-04 with `TEST_PARALLEL=8`.
 
-The quick gate intentionally covers high-value storage semantics only: path-backed minweight persistence, rollback overlay behavior, `WITHOUT ROWID`/sortable index seek behavior, short reader pinned views, WAL fail-fast behavior, logical AUTOINCREMENT sequence preservation, handle-bound dispatch after global engine switching, direct optimistic read-set/range conflict checks, and the no-legacy-raw-index-key path. Keep low-priority shim checks such as `sqlite_dbpage`, cache/mmap visible state, and custom-VFS snapshot import out of this default list.
+The quick gate intentionally covers high-value storage semantics only: path-backed minweight persistence, rollback overlay behavior, `WITHOUT ROWID`/sortable index seek behavior, short reader pinned views, WAL fail-fast behavior, logical AUTOINCREMENT sequence preservation, logical generated-column preservation, handle-bound dispatch after global engine switching, direct optimistic read-set/range conflict checks, and the no-legacy-raw-index-key path. Keep low-priority shim checks such as `sqlite_dbpage`, cache/mmap visible state, and custom-VFS snapshot import out of this default list.
 
 The old `./test-minweight-quick.sh`, `./test-minweight-broad.sh`, and `./test-minweight-full.sh` entry points are thin wrappers around `./test-minweight.sh quick|broad|full`.
 
@@ -192,7 +193,7 @@ The default lib compile matrix is intentionally only `darwin/arm64` and `linux/a
 - P0: keep WAL disabled/fail-fast until stable generation-pinned read views exist. The adapter no longer advertises pager WAL support and no longer creates `-wal` placeholders; `SQLITE_FCNTL_PERSIST_WAL` remains a low-priority visible-state shim, not WAL support.
 - P0: continue removing metadata races around read-view lifetime. Writer metadata now uses a working copy, commit publishes it with the overlay, and generation-pinned readers reconstruct old metadata from retained states; explicit transaction view lifetime still needs a clearer fail-fast/lock boundary before WAL-like concurrency can be claimed.
 - P1: multi-database `ATTACH` commit is still logical best-effort, not crash-atomic master-journal semantics. Treat it as SQL-level coverage only until a cross-database commit protocol exists.
-- P1: logical backup/serialize remain SQL replay/logical snapshot features, not SQLite page-image backup. `sqlite_sequence` is now preserved for AUTOINCREMENT semantics; keep virtual tables, shadow tables, generated/hidden columns, stats tables, and backup progress semantics on the risk list.
+- P1: logical backup/serialize remain SQL replay/logical snapshot features, not SQLite page-image backup. `sqlite_sequence` is now preserved for AUTOINCREMENT semantics, and generated columns are copied by inserting only writable base columns; keep virtual tables, shadow tables, hidden virtual-table columns, stats tables, and backup progress semantics on the risk list.
 - P1: continue replacing root/store maintenance fallbacks. `clearRoot`/`moveRoot` now use seek iteration for int-key and versioned non-int-key roots; `BtreeIntegrityCheck` now uses streaming full scans or selected-root range scans instead of whole-store snapshots; `BtreeCopyFile` now uses streaming batch/overlay copy, but still scans source and target because the operation replaces a whole btree.
 - P1: refine minweight error-code mapping and remove panic paths for unknown btree/cursor handles from user-facing ABI error paths.
 - P1: keep splitting historical large/complex minweight functions and tests. New/changed code must stay clean under `golangci-lint --new --enable-only=gocyclo,funlen`; full historical cleanup can continue in smaller commits instead of hiding semantic changes inside a giant mechanical refactor.
