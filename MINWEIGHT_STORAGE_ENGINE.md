@@ -53,6 +53,8 @@ Last updated: 2026-06-04.
 - Started splitting the large minweight adapter file by moving root clear/move maintenance into `lib/minweight_storage_engine_roots.go`; key encoding, cursor movement, transaction view, and pager/file shims are still planned split boundaries.
 - Moved `BtreeCopyFile` off the logical `snapshot()/restoreSnapshot()` path. It now streams source committed KV plus the source writer overlay into the target writer overlay or one target `minweight.Store.WriteBatch`, and direct lib coverage verifies target transaction visibility before commit.
 - Started splitting minweight direct tests by feature: key-format tests, root-maintenance tests, and copy-file tests now live in separate `_test.go` files instead of further growing `lib/minweight_storage_engine_test.go`.
+- Moved `BtreeCursorRestore` for stale versioned index cursors onto point lookup plus `SeekGE`, and moved int-key stats recompute onto seek iteration. The remaining `loadRows()` production caller is now the stale/materialized cursor fallback inside `refreshCursorRows()`.
+- Split cursor-restore tests into `lib/minweight_storage_engine_cursor_test.go` and added direct coverage for a stale index cursor restoring to the next versioned key after its current record is deleted.
 - Added minweight logical `Serialize`/`Deserialize` round-trip support for schema and row data without pretending to expose SQLite page bytes.
 - Matched `SQLITE_FCNTL_PERSIST_WAL` for minweight's path-backed databases with `-wal` placeholder cleanup/persistence behavior.
 - Matched write transaction rollback, explicit savepoint rollback/release, and statement-level rollback for minweight logical state.
@@ -153,7 +155,7 @@ No top-level tests are currently skipped only because `SQLITE_TEST_STORAGE_ENGIN
 
 ## TODO
 
-- P0: finish replacing remaining materialized root consumers. Int-key table movement, non-int-key sequential movement, versioned-root `BtreeIndexMoveto`, root clear/move, and `BtreeCopyFile` now avoid `loadRows()`; remaining `loadRows()` users are fallback cursor restoration and int-key stats recompute.
+- P0: finish replacing remaining materialized root consumers. Int-key table movement, non-int-key sequential movement, versioned-root `BtreeIndexMoveto`, root clear/move, `BtreeCopyFile`, `BtreeCursorRestore`, and int-key stats recompute now avoid `loadRows()`; the remaining production caller is `refreshCursorRows()` for stale/materialized cursor fallback paths in `Next`/`Previous`/`Eof`.
 - P0: replace remaining transaction-start snapshot read paths with adapter-owned optimistic transaction views: statement/read cursor generation pins, writer read set/range read set/write set, commit-phase validation, and in-memory old-generation retention while readers may still access it.
 - P0: finish optimistic transaction-view integration. The current foundation tracks committed generations, point read sets, root-level range read sets, reader pins, retained key changes, and commit conflict tests; next steps are byte-range read sets where root-level conflict is too coarse, SQL statement/cursor pin boundaries, busy-handler behavior for conflicts, and removal of transaction-start snapshot reads from normal visibility.
 - P0: keep explicit long read transactions unsupported until the generation pin/release model is complete. Autocommit statement readers can pin short views; multi-statement old-view semantics must fail fast or keep rollback-journal `SQLITE_BUSY` behavior rather than pretending full MVCC.

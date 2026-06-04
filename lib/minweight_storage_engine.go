@@ -2204,7 +2204,21 @@ func (bt *minweightBtree) resetTableStats(root uint32) {
 }
 
 func (bt *minweightBtree) recomputeIntKeyStats(root uint32) error {
-	rows, err := bt.loadRows(root, true)
+	var rowCount int64
+	var minRowid int64
+	var maxRowid int64
+	row, ok, err := bt.seekTableGE(root, math.MinInt64)
+	for ok {
+		if rowCount == 0 {
+			minRowid = row.rowid
+		}
+		maxRowid = row.rowid
+		rowCount++
+		if row.rowid == math.MaxInt64 {
+			break
+		}
+		row, ok, err = bt.seekTableGE(root, row.rowid+1)
+	}
 	if err != nil {
 		return err
 	}
@@ -2212,13 +2226,13 @@ func (bt *minweightBtree) recomputeIntKeyStats(root uint32) error {
 	defer bt.mu.Unlock()
 	bt.updateStateLocked(func(state *minweightDBState) {
 		table := state.tables[root]
-		table.rowCount = int64(len(rows))
-		if len(rows) == 0 {
+		table.rowCount = rowCount
+		if rowCount == 0 {
 			table.minRowid = 0
 			table.maxRowid = 0
 		} else {
-			table.minRowid = rows[0].rowid
-			table.maxRowid = rows[len(rows)-1].rowid
+			table.minRowid = minRowid
+			table.maxRowid = maxRowid
 		}
 		state.tables[root] = table
 	})
@@ -2886,6 +2900,36 @@ func (e *minweightStorageEngine) BtreeFakeValidCursor(ctx BtreeContext) (r Btree
 	return BtreeCursorHandle{}
 }
 
+func minweightRestoreIndexCursor(cur *minweightCursor, row minweightRow) (int32, error) {
+	if !minweightIndexKeyVersionedForRoot(cur.root, row.storeKey) {
+		return 0, minweightCorruptMetadata("index cursor restore missing versioned store key")
+	}
+	payload, ok, err := cur.btree.get(row.storeKey)
+	if err != nil {
+		return 0, err
+	}
+	if ok {
+		cur.setCurrent(minweightRow{
+			key:      append([]byte(nil), payload...),
+			storeKey: append([]byte(nil), row.storeKey...),
+			payload:  append([]byte(nil), payload...),
+		})
+		return 0, nil
+	}
+	next, ok, err := cur.btree.seekIndexGE(cur.root, row.storeKey, false)
+	if err != nil {
+		return 0, err
+	}
+	if ok {
+		cur.setCurrent(next)
+	} else {
+		cur.clearCurrent()
+		cur.lastRow = row
+		cur.hasLastRow = true
+	}
+	return 1, nil
+}
+
 func (e *minweightStorageEngine) BtreeCursorRestore(ctx BtreeContext, pCur BtreeCursorHandle, pDifferentRow BtreeMemoryHandle) (r int32) {
 	if pCur.IsNil() {
 		minweightWriteResult(pDifferentRow, 0)
@@ -2928,20 +2972,11 @@ func (e *minweightStorageEngine) BtreeCursorRestore(ctx BtreeContext, pCur Btree
 				differentRow = 1
 			}
 		} else {
-			if rc := e.refreshCursorRows(ctx, pCur, cur); rc != SQLITE_OK {
-				return rc
+			moved, err := minweightRestoreIndexCursor(cur, row)
+			if err != nil {
+				return minweightSQLiteError(err)
 			}
-			if i := minweightFindRow(cur.rows, row, cur.intKey); i >= 0 {
-				cur.index = i
-				cur.valid = true
-				cur.hasLastRow = false
-			} else {
-				cur.index = minweightFindRowAtOrAfter(cur.rows, row, cur.intKey)
-				cur.valid = cur.index < len(cur.rows)
-				cur.lastRow = row
-				cur.hasLastRow = true
-				differentRow = 1
-			}
+			differentRow = moved
 		}
 	}
 	minweightWriteResult(pDifferentRow, differentRow)

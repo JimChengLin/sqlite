@@ -161,7 +161,7 @@ value = SQLite index record bytes
 - `BtreeIndexMoveto` 的最终 compare result 仍来自 SQLite record comparator，避免 adapter 自己重新定义 SQLite record 比较语义。
 - `BtreePayload` / `BtreePayloadFetch` 把当前 row 的 payload 写回 SQLite 期待的内存位置。
 
-cursor 会记录 `dataVer`。写入后 database 的 `dataVer++`，后续 `BtreeNext` / `BtreePrevious` / `BtreeEof` 发现版本变化，会重新加载当前 root 的 rows，并尽量把 cursor 定位回原来的 row 或相邻位置。
+cursor 会记录 `dataVer`。写入后 database 的 `dataVer++`，stale table/index cursor restore 已经优先用 point lookup 和 seek 定位回原 row 或相邻 row；`BtreeNext` / `BtreePrevious` / `BtreeEof` 里仍有少数 stale/materialized fallback 会调用 `refreshCursorRows()`，这是继续移除的剩余路径。
 
 这也是临时实现。adapter 不应该把当前 root 甚至整库扫出来 materialize 成 `[]minweightRow`，再用 slice index 假装 cursor。
 
@@ -282,7 +282,7 @@ WAL 语义不是 pager hook，而是 transaction view 的策略变化。只有�
 3. 已完成：修复 sqlite3* 复用后的 stale engine binding。连接关闭会清理 db-level binding；旧连接仍通过已经打开的 btree/cursor handle dispatch，新连接不会继承旧 engine 的 db alias。
 4. 已完成：transaction overlay + WriteBatch commit。写入口写 per-writer delta 和 working metadata；commit phase two 用 `minweight.Store.WriteBatch` 批量落到 committed store；rollback/savepoint/statement rollback 恢复或丢弃 overlay，不再扫描/重放整库。
 5. adapter view 接口：读路径已经不再用 writer whole-store snapshot 隐藏未提交写；int-key table cursor movement、versioned non-int-key sequential movement、versioned-root `BtreeIndexMoveto` 已经只依赖 `Get`/`SeekGE`/`SeekLE`/`ReverseScanRange` 和 overlay。下一步要把剩余 snapshot read path 换成 generation pin + read/write set validation；显式长读事务先不支持。
-6. 部分完成：seek cursor / root maintenance。int-key table cursor 的 `First`/`Last`/`TableMoveto`/`Next`/`Previous` 已经从 materialized root rows 迁到 `SeekGE`/`SeekLE`；non-int-key 顺序 cursor movement 已经迁到 versioned key 的 `SeekGE`/`ReverseScanRange` 并 merge overlay；`BtreeIndexMoveto` 已经迁到 sortable probe `SeekGE`；int-key 和 versioned non-int-key `clearRoot`/`moveRoot` 也已经用 seek 迭代维护 root；`BtreeCopyFile` 已经从 snapshot/restore 中间层换成 target overlay / `WriteBatch` copy。raw index key 旧格式已删除兼容路径。
+6. 部分完成：seek cursor / root maintenance。int-key table cursor 的 `First`/`Last`/`TableMoveto`/`Next`/`Previous` 已经从 materialized root rows 迁到 `SeekGE`/`SeekLE`；non-int-key 顺序 cursor movement 已经迁到 versioned key 的 `SeekGE`/`ReverseScanRange` 并 merge overlay；`BtreeIndexMoveto` 已经迁到 sortable probe `SeekGE`；stale cursor restore、int-key stats recompute、int-key 和 versioned non-int-key `clearRoot`/`moveRoot` 也已经用 seek 维护；`BtreeCopyFile` 已经从 snapshot/restore 中间层换成 target overlay / `WriteBatch` copy。raw index key 旧格式已删除兼容路径。
 7. 已完成底座：`sqliteComparableKey` 为 index / WITHOUT ROWID btree 生成 versioned physical key。内置存储类、内置 collation 和 DESC 先支持；无法编码的自定义 collation、BIGNULL 和非 UTF-8 KeyInfo fail fast。
 8. 部分完成：optimistic transaction view。当前已有 committed generation、短 reader-view pin、旧 generation key-change retention/prune、writer point read set、root-level range read set、commit 冲突校验和 direct adapter tests。还缺 byte-range read set、SQL statement/cursor 生命周期 pin、冲突 busy-handler 集成，以及把普通读可见性从 transaction-start snapshot 完整迁到 generation view。显式长读事务在这个能力完整前 fail fast 或保持 rollback-journal busy 语义。
 9. 已完成：raw index key 策略。这个项目还没有发布，所以不保留旧 raw key 兼容；新写入始终使用 versioned `sqliteComparableKey`，旧 raw key 直接 fail fast。
