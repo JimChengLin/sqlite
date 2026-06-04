@@ -196,6 +196,7 @@ type minweightTxn struct {
 	baseGeneration uint64
 	state          minweightDBState
 	reads          map[string]struct{}
+	readRoots      map[uint32]struct{}
 	readMeta       bool
 	writes         map[string]minweightTxnWrite
 	savepoints     []minweightTxnSavepoint
@@ -1513,6 +1514,7 @@ func (bt *minweightBtree) newTxnLocked() *minweightTxn {
 		baseGeneration: bt.generation,
 		state:          bt.stateLocked(),
 		reads:          map[string]struct{}{},
+		readRoots:      map[uint32]struct{}{},
 		readMeta:       true,
 		writes:         map[string]minweightTxnWrite{},
 	}
@@ -1598,6 +1600,14 @@ func (bt *minweightBtree) get(key []byte) ([]byte, bool, error) {
 	}
 	bt.mu.Unlock()
 	return value, ok, nil
+}
+
+func (bt *minweightBtree) noteRootRead(root uint32) {
+	bt.mu.Lock()
+	if tx := bt.activeTxnLocked(); tx != nil {
+		tx.readRoots[root] = struct{}{}
+	}
+	bt.mu.Unlock()
 }
 
 func (bt *minweightBtree) put(key, value []byte) error {
@@ -1862,6 +1872,7 @@ func (db *minweightDatabase) recomputeTableStats() error {
 }
 
 func (bt *minweightBtree) loadRows(root uint32, intKey bool) ([]minweightRow, error) {
+	bt.noteRootRead(root)
 	prefix := minweightRootPrefix(root, intKey)
 	writes := bt.txnWritesSnapshot()
 	rowsByKey := map[string]minweightRow{}
@@ -2039,6 +2050,7 @@ func minweightBetterTableLERow(a minweightRow, aOK bool, b minweightRow, bOK boo
 }
 
 func (bt *minweightBtree) seekIndexGE(root uint32, target []byte, strict bool) (minweightRow, bool, error) {
+	bt.noteRootRead(root)
 	overlayRow, overlayOK := bt.indexOverlayCandidate(root, target, true, strict)
 	seekKey := append([]byte(nil), target...)
 	if strict {
@@ -2070,6 +2082,7 @@ func (bt *minweightBtree) seekIndexGE(root uint32, target []byte, strict bool) (
 }
 
 func (bt *minweightBtree) seekIndexLE(root uint32, target []byte, strict bool) (minweightRow, bool, error) {
+	bt.noteRootRead(root)
 	overlayRow, overlayOK := bt.indexOverlayCandidate(root, target, false, strict)
 	lower := minweightVersionedIndexLower(root)
 	var baseRow minweightRow
@@ -2131,6 +2144,7 @@ func (bt *minweightBtree) hasLegacyIndexKeys(root uint32) (bool, error) {
 }
 
 func (bt *minweightBtree) seekTableGE(root uint32, target int64) (minweightRow, bool, error) {
+	bt.noteRootRead(root)
 	overlayRow, overlayOK := bt.tableOverlayCandidate(root, target, true)
 	seekKey := minweightTableKey(root, target)
 	for {
@@ -2162,6 +2176,7 @@ func (bt *minweightBtree) seekTableGE(root uint32, target int64) (minweightRow, 
 }
 
 func (bt *minweightBtree) seekTableLE(root uint32, target int64) (minweightRow, bool, error) {
+	bt.noteRootRead(root)
 	overlayRow, overlayOK := bt.tableOverlayCandidate(root, target, false)
 	seekKey := minweightTableKey(root, target)
 	for {
@@ -2743,6 +2758,11 @@ func (db *minweightDatabase) txnReadConflictLocked(tx *minweightTxn, stateChange
 		}
 		for key := range tx.reads {
 			if _, ok := change.keys[key]; ok {
+				return true
+			}
+		}
+		for root := range tx.readRoots {
+			if _, ok := change.roots[root]; ok {
 				return true
 			}
 		}

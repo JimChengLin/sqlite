@@ -786,6 +786,58 @@ func TestMinweightCommitDetectsReadSetConflict(t *testing.T) {
 	}
 }
 
+func TestMinweightCommitDetectsRangeReadConflict(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	if rc, _ := h.bt.beginTrans(h.ctx, 1); rc != SQLITE_OK {
+		t.Fatalf("beginTrans rc = %d, want SQLITE_OK", rc)
+	}
+	if _, ok, err := h.bt.seekTableGE(1, 1); err != nil || ok {
+		t.Fatalf("empty range seek ok=%v err=%v, want no row", ok, err)
+	}
+	h.bt.changes = append(h.bt.changes, minweightCommitChange{
+		generation: 2,
+		keys:       map[string]minweightCommittedKeyChange{},
+		roots:      map[uint32]struct{}{1: {}},
+	})
+	h.bt.generation = 2
+	if err := h.bt.put(minweightTableKey(1, 10), []byte("own")); err != nil {
+		t.Fatal(err)
+	}
+	err := h.bt.commitActiveWriteTxn()
+	if !errors.Is(err, errMinweightTxnConflict) {
+		t.Fatalf("commit error = %v, want range read conflict", err)
+	}
+	if _, ok, err := h.bt.store.Get(minweightTableKey(1, 10)); err != nil || ok {
+		t.Fatalf("conflicted range write visible ok=%v err=%v, want absent", ok, err)
+	}
+}
+
+func TestMinweightCommitIgnoresUnrelatedRangeChange(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	if rc, _ := h.bt.beginTrans(h.ctx, 1); rc != SQLITE_OK {
+		t.Fatalf("beginTrans rc = %d, want SQLITE_OK", rc)
+	}
+	if _, ok, err := h.bt.seekTableGE(1, 1); err != nil || ok {
+		t.Fatalf("empty range seek ok=%v err=%v, want no row", ok, err)
+	}
+	h.bt.changes = append(h.bt.changes, minweightCommitChange{
+		generation: 2,
+		keys:       map[string]minweightCommittedKeyChange{},
+		roots:      map[uint32]struct{}{2: {}},
+	})
+	h.bt.generation = 2
+	if err := h.bt.put(minweightTableKey(1, 10), []byte("own")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.bt.commitActiveWriteTxn(); err != nil {
+		t.Fatalf("commit with unrelated root change: %v", err)
+	}
+	value, ok, err := h.bt.store.Get(minweightTableKey(1, 10))
+	if err != nil || !ok || !bytes.Equal(value, []byte("own")) {
+		t.Fatalf("committed value ok=%v value=%q err=%v, want own", ok, value, err)
+	}
+}
+
 func TestMinweightOpenTracksSharedCacheConnectionCount(t *testing.T) {
 	tls := libc.NewTLS()
 	defer tls.Close()
