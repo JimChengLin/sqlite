@@ -197,6 +197,61 @@ func TestMinweightWriteTxnTableSeekUsesBaseGenerationAndOverlay(t *testing.T) {
 	h.bt.releaseTrans()
 }
 
+func minweightCommitStateChange(t *testing.T, h *minweightBtreeTestHarness, fn func(*minweightDBState)) {
+	t.Helper()
+	minweightBeginWriteTxn(t, h.bt, h.ctx)
+	h.bt.mu.Lock()
+	h.bt.updateStateLocked(fn)
+	h.bt.mu.Unlock()
+	if err := h.bt.commitActiveWriteTxn(); err != nil {
+		t.Fatal(err)
+	}
+	h.bt.releaseTrans()
+}
+
+func TestMinweightPinnedReaderMetadataUsesOldGeneration(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	reader := &minweightBtree{minweightDatabase: h.bt.minweightDatabase}
+	h.bt.meta[BTREE_USER_VERSION] = 7
+	h.bt.dataVer = 11
+	reader.retainReader()
+
+	minweightCommitStateChange(t, h, func(state *minweightDBState) {
+		state.meta[BTREE_USER_VERSION] = 9
+		state.dataVer = 12
+		state.next = 2
+		state.tables[2] = minweightTable{intKey: true, rowCount: 3, minRowid: 1, maxRowid: 3}
+	})
+	minweightCommitStateChange(t, h, func(state *minweightDBState) {
+		state.meta[BTREE_USER_VERSION] = 13
+		state.dataVer = 14
+	})
+
+	if got := reader.visibleMeta(BTREE_USER_VERSION); got != 7 {
+		t.Fatalf("reader user_version = %d, want 7", got)
+	}
+	if got := reader.visibleMeta(BTREE_DATA_VERSION); got != 11 {
+		t.Fatalf("reader data version = %d, want 11", got)
+	}
+	if _, ok := reader.visibleTable(2); ok {
+		t.Fatal("reader root 2 visible, want absent at pinned generation")
+	}
+	if got := reader.visibleState().next; got != 1 {
+		t.Fatalf("reader next root = %d, want 1", got)
+	}
+	if got := h.bt.visibleMeta(BTREE_USER_VERSION); got != 13 {
+		t.Fatalf("current user_version = %d, want 13", got)
+	}
+	if got := h.bt.visibleMeta(BTREE_DATA_VERSION); got != 14 {
+		t.Fatalf("current data version = %d, want 14", got)
+	}
+	if table, ok := h.bt.visibleTable(2); !ok || !table.intKey || table.rowCount != 3 {
+		t.Fatalf("current root 2 = %#v ok=%v, want int-key row count 3", table, ok)
+	}
+
+	reader.releaseReader()
+}
+
 func TestMinweightWriteTxnDeleteUsesBaseGeneration(t *testing.T) {
 	h := newMinweightBtreeTestHarness(t)
 	key := minweightTableKey(1, 42)

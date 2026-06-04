@@ -1429,14 +1429,14 @@ func (bt *minweightBtree) visibleState() minweightDBState {
 	if tx := bt.activeTxnLocked(); tx != nil {
 		return minweightCloneState(tx.state)
 	}
-	return bt.stateLocked()
+	return bt.stateAtGenerationLocked(bt.readGenerationLocked())
 }
 
 func (bt *minweightBtree) visibleStateLocked() minweightDBState {
 	if tx := bt.activeTxnLocked(); tx != nil {
 		return minweightCloneState(tx.state)
 	}
-	return bt.stateLocked()
+	return bt.stateAtGenerationLocked(bt.readGenerationLocked())
 }
 
 func (bt *minweightBtree) mutableStateLocked() *minweightDBState {

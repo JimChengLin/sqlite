@@ -20,6 +20,20 @@ func (bt *minweightBtree) readGeneration() uint64 {
 	return bt.readGenerationLocked()
 }
 
+func (db *minweightDatabase) stateAtGenerationLocked(generation uint64) minweightDBState {
+	state := db.stateLocked()
+	for i := len(db.changes) - 1; i >= 0; i-- {
+		change := db.changes[i]
+		if change.generation <= generation {
+			break
+		}
+		if change.meta {
+			state = minweightCloneState(change.beforeState)
+		}
+	}
+	return state
+}
+
 func (bt *minweightBtree) valueForKeyAtGeneration(key []byte, generation uint64) ([]byte, bool, error) {
 	value, ok, err := bt.store.Get(key)
 	if err != nil {
