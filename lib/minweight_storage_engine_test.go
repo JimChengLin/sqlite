@@ -667,6 +667,66 @@ func TestMinweightCommitGenerationRetainsPinnedOldVersion(t *testing.T) {
 	}
 }
 
+func minweightAssertGet(t *testing.T, bt *minweightBtree, key []byte, want []byte, wantOK bool) {
+	t.Helper()
+	value, ok, err := bt.get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok != wantOK || !bytes.Equal(value, want) {
+		t.Fatalf("get(%x) ok=%v value=%q, want ok=%v value=%q", key, ok, value, wantOK, want)
+	}
+}
+
+func TestMinweightPinnedReaderPointGetUsesOldGeneration(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	reader := &minweightBtree{minweightDatabase: h.bt.minweightDatabase}
+	updateKey := minweightTableKey(1, 1)
+	insertKey := minweightTableKey(1, 2)
+	deleteKey := minweightTableKey(1, 3)
+	if err := h.bt.store.Put(updateKey, []byte("old-update")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.bt.store.Put(deleteKey, []byte("old-delete")); err != nil {
+		t.Fatal(err)
+	}
+	reader.retainReader()
+	if rc, _ := h.bt.beginTrans(h.ctx, 1); rc != SQLITE_OK {
+		t.Fatalf("beginTrans rc = %d, want SQLITE_OK", rc)
+	}
+	if err := h.bt.put(updateKey, []byte("new-update")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.bt.put(insertKey, []byte("new-insert")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.bt.delete(deleteKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.bt.commitActiveWriteTxn(); err != nil {
+		t.Fatal(err)
+	}
+	if rc, _ := h.bt.beginTrans(h.ctx, 1); rc != SQLITE_OK {
+		t.Fatalf("second beginTrans rc = %d, want SQLITE_OK", rc)
+	}
+	if err := h.bt.put(updateKey, []byte("newer-update")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.bt.commitActiveWriteTxn(); err != nil {
+		t.Fatal(err)
+	}
+
+	minweightAssertGet(t, reader, updateKey, []byte("old-update"), true)
+	minweightAssertGet(t, reader, insertKey, nil, false)
+	minweightAssertGet(t, reader, deleteKey, []byte("old-delete"), true)
+	minweightAssertGet(t, h.bt, updateKey, []byte("newer-update"), true)
+	minweightAssertGet(t, h.bt, insertKey, []byte("new-insert"), true)
+	minweightAssertGet(t, h.bt, deleteKey, nil, false)
+
+	reader.releaseReader()
+	h.bt.releaseTrans()
+}
+
 func TestMinweightCommitDetectsReadSetConflict(t *testing.T) {
 	h := newMinweightBtreeTestHarness(t)
 	if err := h.bt.store.Put(minweightTableKey(1, 1), []byte("old")); err != nil {

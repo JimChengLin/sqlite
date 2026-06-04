@@ -1474,6 +1474,40 @@ func (bt *minweightBtree) txnWritesSnapshot() map[string]minweightTxnWrite {
 	return minweightCloneTxnWrites(tx.writes)
 }
 
+func (bt *minweightBtree) readGenerationLocked() uint64 {
+	if tx := bt.activeTxnLocked(); tx != nil {
+		return tx.baseGeneration
+	}
+	if generation, ok := bt.readerViews[bt]; ok {
+		return generation
+	}
+	return bt.generation
+}
+
+func (db *minweightDatabase) valueAtGenerationLocked(key []byte, value []byte, ok bool, generation uint64) ([]byte, bool) {
+	for i := len(db.changes) - 1; i >= 0; i-- {
+		change := db.changes[i]
+		if change.generation <= generation {
+			break
+		}
+		keyChange, changed := change.keys[string(key)]
+		if !changed {
+			continue
+		}
+		if !keyChange.beforeExist {
+			value = nil
+			ok = false
+			continue
+		}
+		value = keyChange.before
+		ok = true
+	}
+	if !ok {
+		return nil, false
+	}
+	return append([]byte(nil), value...), true
+}
+
 func (bt *minweightBtree) get(key []byte) ([]byte, bool, error) {
 	bt.mu.Lock()
 	if tx := bt.activeTxnLocked(); tx != nil {
@@ -1485,12 +1519,14 @@ func (bt *minweightBtree) get(key []byte) ([]byte, bool, error) {
 			return append([]byte(nil), write.value...), true, nil
 		}
 	}
+	generation := bt.readGenerationLocked()
 	bt.mu.Unlock()
 	value, ok, err := bt.store.Get(key)
 	if err != nil {
 		return nil, false, err
 	}
 	bt.mu.Lock()
+	value, ok = bt.valueAtGenerationLocked(key, value, ok, generation)
 	if tx := bt.activeTxnLocked(); tx != nil {
 		tx.reads[string(key)] = struct{}{}
 	}
