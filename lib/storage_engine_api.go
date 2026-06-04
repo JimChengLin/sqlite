@@ -17,6 +17,34 @@ import (
 // engine does not implement an operation SQLite needs for the current query.
 var ErrStorageEngineUnsupported = errors.New("sqlite storage engine: unsupported operation")
 
+func storageEngineBtCursorFromPointer(pCur uintptr) *BtCursor {
+	return (*BtCursor)(unsafe.Pointer(pCur)) //nolint:govet // pCur is a SQLite ABI pointer to BtCursor.
+}
+
+func storageEngineByteSliceFromPointer(p uintptr, n int) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(p)), n) //nolint:govet // p is a SQLite ABI pointer to n bytes.
+}
+
+func storageEnginePayloadFromPointer(p uintptr) *BtreePayload {
+	return (*BtreePayload)(unsafe.Pointer(p)) //nolint:govet // p is a SQLite ABI pointer to BtreePayload.
+}
+
+func storageEngineInt32FromPointer(p uintptr) *int32 {
+	return (*int32)(unsafe.Pointer(p)) //nolint:govet // p is a SQLite ABI pointer to int32.
+}
+
+func storageEngineUint32FromPointer(p uintptr) *uint32 {
+	return (*uint32)(unsafe.Pointer(p)) //nolint:govet // p is a SQLite ABI pointer to uint32.
+}
+
+func storageEngineInt64FromPointer(p uintptr) *int64 {
+	return (*int64)(unsafe.Pointer(p)) //nolint:govet // p is a SQLite ABI pointer to int64.
+}
+
+func storageEngineUintptrFromPointer(p uintptr) *uintptr {
+	return (*uintptr)(unsafe.Pointer(p)) //nolint:govet // p is a SQLite ABI pointer to uintptr.
+}
+
 // StorageEngine is the btree storage engine dispatch surface.
 // The default implementation delegates to the generated SQLite btree code.
 type StorageEngine interface {
@@ -177,19 +205,180 @@ type storageEngineHolder struct {
 
 var currentStorageEngine atomic.Value
 var storageEngineSwitchMu sync.Mutex
+var storageEngineDispatch storageEngineDispatcher
+var storageEngineBinding = storageEngineBindings{
+	btrees:  map[uintptr]StorageEngine{},
+	cursors: map[uintptr]StorageEngine{},
+	dbs:     map[uintptr]StorageEngine{},
+	btreeDB: map[uintptr]uintptr{},
+	dbRefs:  map[uintptr]int{},
+}
+
+type storageEngineBindings struct {
+	mu      sync.RWMutex
+	btrees  map[uintptr]StorageEngine
+	cursors map[uintptr]StorageEngine
+	dbs     map[uintptr]StorageEngine
+	btreeDB map[uintptr]uintptr
+	dbRefs  map[uintptr]int
+}
+
+type storageEngineDispatcher struct{}
 
 func init() {
 	currentStorageEngine.Store(storageEngineHolder{engine: nativeBtreeStorageEngine{}})
 }
 
-func storageEngine() StorageEngine {
+func selectedStorageEngine() StorageEngine {
 	return currentStorageEngine.Load().(storageEngineHolder).engine
+}
+
+func storageEngine() StorageEngine { return storageEngineDispatch }
+
+func storageEngineForDB(db SQLiteHandle) StorageEngine {
+	if db.ptr == 0 {
+		return selectedStorageEngine()
+	}
+	storageEngineBinding.mu.RLock()
+	engine := storageEngineBinding.dbs[db.ptr]
+	storageEngineBinding.mu.RUnlock()
+	if engine != nil {
+		return engine
+	}
+	return selectedStorageEngine()
+}
+
+func storageEngineForBtreeHandle(p BtreeHandle) StorageEngine {
+	if p.ptr == 0 {
+		return selectedStorageEngine()
+	}
+	storageEngineBinding.mu.RLock()
+	engine := storageEngineBinding.btrees[p.ptr]
+	storageEngineBinding.mu.RUnlock()
+	if engine != nil {
+		return engine
+	}
+	return selectedStorageEngine()
+}
+
+func storageEngineForBtreeToken(ptr uintptr) StorageEngine {
+	return storageEngineForBtreeHandle(BtreeHandle{ptr: ptr})
+}
+
+func storageEngineForCursorHandle(pCur BtreeCursorHandle) StorageEngine {
+	if pCur.ptr == 0 {
+		return selectedStorageEngine()
+	}
+	storageEngineBinding.mu.RLock()
+	engine := storageEngineBinding.cursors[pCur.ptr]
+	storageEngineBinding.mu.RUnlock()
+	if engine != nil {
+		return engine
+	}
+	pBtree := storageEngineBtCursorFromPointer(pCur.ptr).FpBtree
+	if pBtree != 0 {
+		return storageEngineForBtreeHandle(btreeHandle(pCur.tls, pBtree))
+	}
+	return selectedStorageEngine()
+}
+
+func storageEngineForCursorOrDB(pCur BtreeCursorHandle, db SQLiteHandle) StorageEngine {
+	if pCur.ptr != 0 {
+		storageEngineBinding.mu.RLock()
+		engine := storageEngineBinding.cursors[pCur.ptr]
+		storageEngineBinding.mu.RUnlock()
+		if engine != nil {
+			return engine
+		}
+		pBtree := storageEngineBtCursorFromPointer(pCur.ptr).FpBtree
+		if pBtree != 0 {
+			return storageEngineForBtreeHandle(btreeHandle(pCur.tls, pBtree))
+		}
+	}
+	return storageEngineForDB(db)
+}
+
+func registerStorageEngineBtree(p BtreeHandle, db SQLiteHandle, engine StorageEngine) {
+	if p.ptr == 0 {
+		return
+	}
+	storageEngineBinding.mu.Lock()
+	storageEngineBinding.btrees[p.ptr] = engine
+	if db.ptr != 0 {
+		if storageEngineBinding.dbs[db.ptr] == nil {
+			storageEngineBinding.dbs[db.ptr] = engine
+		}
+		storageEngineBinding.btreeDB[p.ptr] = db.ptr
+		storageEngineBinding.dbRefs[db.ptr]++
+	}
+	storageEngineBinding.mu.Unlock()
+}
+
+func unregisterStorageEngineBtree(p BtreeHandle) {
+	if p.ptr == 0 {
+		return
+	}
+	storageEngineBinding.mu.Lock()
+	delete(storageEngineBinding.btrees, p.ptr)
+	db := storageEngineBinding.btreeDB[p.ptr]
+	delete(storageEngineBinding.btreeDB, p.ptr)
+	if db != 0 {
+		refs := storageEngineBinding.dbRefs[db] - 1
+		if refs <= 0 {
+			delete(storageEngineBinding.dbRefs, db)
+			delete(storageEngineBinding.dbs, db)
+		} else {
+			storageEngineBinding.dbRefs[db] = refs
+		}
+	}
+	storageEngineBinding.mu.Unlock()
+}
+
+func unregisterStorageEngineDB(db SQLiteHandle) {
+	if db.ptr == 0 {
+		return
+	}
+	storageEngineBinding.mu.Lock()
+	delete(storageEngineBinding.dbs, db.ptr)
+	delete(storageEngineBinding.dbRefs, db.ptr)
+	for btree, btreeDB := range storageEngineBinding.btreeDB {
+		if btreeDB == db.ptr {
+			delete(storageEngineBinding.btreeDB, btree)
+		}
+	}
+	storageEngineBinding.mu.Unlock()
+}
+
+func registerStorageEngineCursor(pCur BtreeCursorHandle, engine StorageEngine) {
+	if pCur.ptr == 0 {
+		return
+	}
+	storageEngineBinding.mu.Lock()
+	storageEngineBinding.cursors[pCur.ptr] = engine
+	storageEngineBinding.mu.Unlock()
+}
+
+func unregisterStorageEngineCursor(pCur BtreeCursorHandle) {
+	if pCur.ptr == 0 {
+		return
+	}
+	storageEngineBinding.mu.Lock()
+	delete(storageEngineBinding.cursors, pCur.ptr)
+	storageEngineBinding.mu.Unlock()
 }
 
 // StorageEngineIsNative reports whether calls are currently dispatched to the
 // generated SQLite btree implementation.
 func StorageEngineIsNative() bool {
-	_, ok := storageEngine().(nativeBtreeStorageEngine)
+	_, ok := selectedStorageEngine().(nativeBtreeStorageEngine)
+	return ok
+}
+
+// StorageEngineIsNativeForDB reports whether db is bound to the generated
+// SQLite btree implementation. If db has not opened a btree yet, it reports the
+// engine that would be used for a new btree open.
+func StorageEngineIsNativeForDB(tls *libc.TLS, db uintptr) bool {
+	_, ok := storageEngineForDB(sqliteHandle(tls, db)).(nativeBtreeStorageEngine)
 	return ok
 }
 
@@ -213,7 +402,7 @@ func storageEngineLogicalDBPageResult(tls *libc.TLS, ctx uintptr, pageSize int32
 		return SQLITE_NOMEM
 	}
 	defer tls.Free(int(pageSize))
-	page := unsafe.Slice((*byte)(unsafe.Pointer(p)), int(pageSize))
+	page := storageEngineByteSliceFromPointer(p, int(pageSize))
 	clear(page)
 	copy(page, "SQLite format 3\x00")
 	Xsqlite3_result_blob(tls, ctx, p, pageSize, SQLITE_TRANSIENT)
@@ -228,8 +417,12 @@ func SetStorageEngine(engine StorageEngine) {
 	currentStorageEngine.Store(storageEngineHolder{engine: engine})
 }
 
+func StorageEngineConnectionClosed(tls *libc.TLS, db uintptr) {
+	unregisterStorageEngineDB(sqliteHandle(tls, db))
+}
+
 func StorageEngineFileControlPersistWALMode(tls *libc.TLS, db uintptr, dbName string, mode int32) (int32, int32) {
-	engine, ok := storageEngine().(StorageEngineFileControlPersistWAL)
+	engine, ok := storageEngineForDB(sqliteHandle(tls, db)).(StorageEngineFileControlPersistWAL)
 	if !ok {
 		return mode, SQLITE_ERROR
 	}
@@ -237,7 +430,7 @@ func StorageEngineFileControlPersistWALMode(tls *libc.TLS, db uintptr, dbName st
 }
 
 func StorageEngineBeginLogicalBackup(tls *libc.TLS, db uintptr) int32 {
-	engine, ok := storageEngine().(StorageEngineLogicalBackup)
+	engine, ok := storageEngineForDB(sqliteHandle(tls, db)).(StorageEngineLogicalBackup)
 	if !ok {
 		return SQLITE_ERROR
 	}
@@ -245,7 +438,7 @@ func StorageEngineBeginLogicalBackup(tls *libc.TLS, db uintptr) int32 {
 }
 
 func StorageEngineFinishLogicalBackup(tls *libc.TLS, db uintptr) int32 {
-	engine, ok := storageEngine().(StorageEngineLogicalBackup)
+	engine, ok := storageEngineForDB(sqliteHandle(tls, db)).(StorageEngineLogicalBackup)
 	if !ok {
 		return SQLITE_ERROR
 	}
@@ -253,7 +446,7 @@ func StorageEngineFinishLogicalBackup(tls *libc.TLS, db uintptr) int32 {
 }
 
 func StorageEngineSaveLogicalMetadata(tls *libc.TLS, db uintptr) (StorageEngineLogicalMetadata, bool, int32) {
-	engine, ok := storageEngine().(StorageEngineLogicalMetadataProvider)
+	engine, ok := storageEngineForDB(sqliteHandle(tls, db)).(StorageEngineLogicalMetadataProvider)
 	if !ok {
 		return StorageEngineLogicalMetadata{}, false, SQLITE_OK
 	}
@@ -262,7 +455,7 @@ func StorageEngineSaveLogicalMetadata(tls *libc.TLS, db uintptr) (StorageEngineL
 }
 
 func StorageEngineRestoreLogicalMetadata(tls *libc.TLS, db uintptr, meta StorageEngineLogicalMetadata) (bool, int32) {
-	engine, ok := storageEngine().(StorageEngineLogicalMetadataProvider)
+	engine, ok := storageEngineForDB(sqliteHandle(tls, db)).(StorageEngineLogicalMetadataProvider)
 	if !ok {
 		return false, SQLITE_OK
 	}
@@ -270,7 +463,7 @@ func StorageEngineRestoreLogicalMetadata(tls *libc.TLS, db uintptr, meta Storage
 }
 
 func StorageEngineMarkReadOnly(tls *libc.TLS, db uintptr) (bool, int32) {
-	engine, ok := storageEngine().(StorageEngineReadOnlyMarker)
+	engine, ok := storageEngineForDB(sqliteHandle(tls, db)).(StorageEngineReadOnlyMarker)
 	if !ok {
 		return false, SQLITE_OK
 	}
@@ -523,7 +716,7 @@ func (h BtreeCStringHandle) String() string {
 }
 
 func (h BtreePayloadHandle) payload() *BtreePayload {
-	return (*BtreePayload)(unsafe.Pointer(h.ptr))
+	return storageEnginePayloadFromPointer(h.ptr)
 }
 
 // KeyHandle identifies the key bytes inside h.
@@ -584,7 +777,7 @@ func (h BtreeMemoryHandle) WriteBytes(b []byte) {
 	if len(b) == 0 {
 		return
 	}
-	copy(unsafe.Slice((*byte)(unsafe.Pointer(h.ptr)), len(b)), b)
+	copy(storageEngineByteSliceFromPointer(h.ptr, len(b)), b)
 }
 
 // ReadBytes copies n bytes from the SQLite-owned memory pointed to by h.
@@ -593,48 +786,48 @@ func (h BtreeMemoryHandle) ReadBytes(n int) []byte {
 		return nil
 	}
 	b := make([]byte, n)
-	copy(b, unsafe.Slice((*byte)(unsafe.Pointer(h.ptr)), n))
+	copy(b, storageEngineByteSliceFromPointer(h.ptr, n))
 	return b
 }
 
 // GetInt32 reads an int32 from the SQLite-owned memory pointed to by h.
 func (h BtreeMemoryHandle) GetInt32() int32 {
-	return *(*int32)(unsafe.Pointer(h.ptr))
+	return *storageEngineInt32FromPointer(h.ptr)
 }
 
 // GetUint32 reads a uint32 from the SQLite-owned memory pointed to by h.
 func (h BtreeMemoryHandle) GetUint32() uint32 {
-	return *(*uint32)(unsafe.Pointer(h.ptr))
+	return *storageEngineUint32FromPointer(h.ptr)
 }
 
 // GetInt64 reads an int64 from the SQLite-owned memory pointed to by h.
 func (h BtreeMemoryHandle) GetInt64() int64 {
-	return *(*int64)(unsafe.Pointer(h.ptr))
+	return *storageEngineInt64FromPointer(h.ptr)
 }
 
 // GetUintptr reads a uintptr from the SQLite-owned memory pointed to by h.
 func (h BtreeMemoryHandle) GetUintptr() uintptr {
-	return *(*uintptr)(unsafe.Pointer(h.ptr))
+	return *storageEngineUintptrFromPointer(h.ptr)
 }
 
 // PutInt32 writes v to the SQLite-owned memory pointed to by h.
 func (h BtreeMemoryHandle) PutInt32(v int32) {
-	*(*int32)(unsafe.Pointer(h.ptr)) = v
+	*storageEngineInt32FromPointer(h.ptr) = v
 }
 
 // PutUint32 writes v to the SQLite-owned memory pointed to by h.
 func (h BtreeMemoryHandle) PutUint32(v uint32) {
-	*(*uint32)(unsafe.Pointer(h.ptr)) = v
+	*storageEngineUint32FromPointer(h.ptr) = v
 }
 
 // PutInt64 writes v to the SQLite-owned memory pointed to by h.
 func (h BtreeMemoryHandle) PutInt64(v int64) {
-	*(*int64)(unsafe.Pointer(h.ptr)) = v
+	*storageEngineInt64FromPointer(h.ptr) = v
 }
 
 // PutUintptr writes v to the SQLite-owned memory pointed to by h.
 func (h BtreeMemoryHandle) PutUintptr(v uintptr) {
-	*(*uintptr)(unsafe.Pointer(h.ptr)) = v
+	*storageEngineUintptrFromPointer(h.ptr) = v
 }
 
 // PutBtreeToken writes v to the SQLite-owned memory pointed to by h.

@@ -81,7 +81,10 @@ func newConn(dsn string) (*conn, error) {
 		c.Close()
 		return nil, err
 	}
-	if !sqlite3.StorageEngineIsNative() && vfsName != "" {
+	if !sqlite3.StorageEngineIsNativeForDB(c.tls, c.db) && vfsName != "" {
+		// Minweight does not implement SQLite's VFS/page-file layer. For a
+		// custom VFS name, import the existing SQLite file through the native
+		// btree as a read-only logical snapshot.
 		if err := c.importVFSLogicalSnapshot(dsn, vfsName); err != nil {
 			c.Close()
 			return nil, err
@@ -892,6 +895,7 @@ func (c *conn) closeV2(db uintptr) error {
 	if rc := sqlite3.Xsqlite3_close_v2(c.tls, db); rc != sqlite3.SQLITE_OK {
 		return c.errstr(rc)
 	}
+	sqlite3.StorageEngineConnectionClosed(c.tls, db)
 
 	return nil
 }
@@ -1099,7 +1103,7 @@ func (c *conn) query(ctx context.Context, query string, args []driver.NamedValue
 // database or a "TEMP" database, the serialization is the same sequence of bytes
 // which would be written to disk if that database where backed up to disk.
 func (c *conn) Serialize() (v []byte, err error) {
-	if !sqlite3.StorageEngineIsNative() {
+	if !sqlite3.StorageEngineIsNativeForDB(c.tls, c.db) {
 		return logicalSerialize(c)
 	}
 
@@ -1133,7 +1137,7 @@ func (c *conn) Deserialize(buf []byte) (err error) {
 	if bufLen == 0 {
 		return fmt.Errorf("sqlite: empty buffer passed to Deserialize")
 	}
-	if !sqlite3.StorageEngineIsNative() {
+	if !sqlite3.StorageEngineIsNativeForDB(c.tls, c.db) {
 		return logicalDeserialize(c, buf)
 	}
 
@@ -1186,7 +1190,7 @@ func (c *conn) NewRestore(srcUri string) (*Backup, error) {
 }
 
 func (c *conn) backup(remoteConn *conn, restore bool) (_ *Backup, finalErr error) {
-	if !sqlite3.StorageEngineIsNative() {
+	if !sqlite3.StorageEngineIsNativeForDB(c.tls, c.db) || !sqlite3.StorageEngineIsNativeForDB(remoteConn.tls, remoteConn.db) {
 		srcConn := c
 		dstConn := remoteConn
 		if restore {

@@ -10,15 +10,19 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	sqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 func TestMinweightStorageEngineSimpleSPJ(t *testing.T) {
@@ -43,7 +47,7 @@ func TestMinweightStorageEngineSimpleSPJ(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
+	defer closeMinweightRows(t, rows)
 
 	var got []string
 	for rows.Next() {
@@ -178,6 +182,513 @@ func TestMinweightStorageEngineVarcharPrimaryKey(t *testing.T) {
 	}
 	if name != "b" {
 		t.Fatalf("name = %q, want b", name)
+	}
+}
+
+func TestMinweightStorageEngineAttachCommitRollback(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	dir := t.TempDir()
+	mainPath := filepath.Join(dir, "main.db")
+	auxPath := filepath.Join(dir, "aux.db")
+	db, err := sql.Open("sqlite", mainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, db)
+
+	execMinweightSQL(t, db, "CREATE TABLE main.t(id INTEGER PRIMARY KEY, v TEXT UNIQUE)")
+	execMinweightSQL(t, db, "ATTACH DATABASE "+minweightSQLLiteral(auxPath)+" AS aux")
+	execMinweightSQL(t, db, "CREATE TABLE aux.t(id INTEGER PRIMARY KEY, main_id INTEGER, v TEXT UNIQUE)")
+
+	execMinweightSQL(t, db, "BEGIN")
+	execMinweightSQL(t, db, "INSERT INTO main.t(id, v) VALUES (1, 'main-rollback')")
+	execMinweightSQL(t, db, "INSERT INTO aux.t(id, main_id, v) VALUES (10, 1, 'aux-rollback')")
+	execMinweightSQL(t, db, "ROLLBACK")
+	if got := minweightQueryInt(t, db, "SELECT count(*) FROM main.t"); got != 0 {
+		t.Fatalf("main rows after rollback = %d, want 0", got)
+	}
+	if got := minweightQueryInt(t, db, "SELECT count(*) FROM aux.t"); got != 0 {
+		t.Fatalf("aux rows after rollback = %d, want 0", got)
+	}
+
+	execMinweightSQL(t, db, "BEGIN")
+	execMinweightSQL(t, db, "INSERT INTO main.t(id, v) VALUES (1, 'main-commit')")
+	execMinweightSQL(t, db, "INSERT INTO aux.t(id, main_id, v) SELECT 101, id, v || '-copy' FROM main.t")
+	execMinweightSQL(t, db, "COMMIT")
+
+	var got string
+	if err := db.QueryRow(`
+		SELECT main.t.v || ':' || aux.t.v
+		  FROM main.t JOIN aux.t ON aux.t.main_id = main.t.id
+	`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "main-commit:main-commit-copy" {
+		t.Fatalf("joined row = %q, want main-commit:main-commit-copy", got)
+	}
+
+	execMinweightSQL(t, db, "DETACH DATABASE aux")
+
+	aux, err := sql.Open("sqlite", auxPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, aux)
+	if got := minweightQueryInt(t, aux, "SELECT count(*) FROM t WHERE main_id = 1 AND v = 'main-commit-copy'"); got != 1 {
+		t.Fatalf("reopened aux rows = %d, want 1", got)
+	}
+}
+
+func TestMinweightStorageEngineWithoutRowidCompositePrimaryKey(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, db)
+
+	execMinweightSQL(t, db, `
+		CREATE TABLE account_events(
+			account TEXT NOT NULL,
+			seq INTEGER NOT NULL,
+			payload TEXT NOT NULL,
+			PRIMARY KEY(account, seq)
+		) WITHOUT ROWID
+	`)
+	execMinweightSQL(t, db, `
+		INSERT INTO account_events(account, seq, payload) VALUES
+			('acct-b', 2, 'b2'),
+			('acct-a', 2, 'a2'),
+			('acct-b', 1, 'b1'),
+			('acct-a', 1, 'a1')
+	`)
+
+	rows, err := db.Query("SELECT account, seq, payload FROM account_events ORDER BY account, seq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightRows(t, rows)
+	var got []string
+	for rows.Next() {
+		var account string
+		var seq int
+		var payload string
+		if err := rows.Scan(&account, &seq, &payload); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprintf("%s:%d:%s", account, seq, payload))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"acct-a:1:a1", "acct-a:2:a2", "acct-b:1:b1", "acct-b:2:b2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ordered rows = %v, want %v", got, want)
+	}
+
+	execMinweightSQL(t, db, "UPDATE account_events SET payload = 'a2-updated' WHERE account = 'acct-a' AND seq = 2")
+	execMinweightSQL(t, db, "DELETE FROM account_events WHERE account = 'acct-b' AND seq = 1")
+
+	var payload string
+	if err := db.QueryRow("SELECT payload FROM account_events WHERE account = 'acct-a' AND seq = 2").Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload != "a2-updated" {
+		t.Fatalf("updated payload = %q, want a2-updated", payload)
+	}
+	if got := minweightQueryInt(t, db, "SELECT count(*) FROM account_events WHERE account = 'acct-b'"); got != 1 {
+		t.Fatalf("remaining acct-b rows = %d, want 1", got)
+	}
+	if rows, err := db.Query("SELECT rowid FROM account_events"); err == nil {
+		_ = rows.Close()
+		t.Fatal("rowid query succeeded for WITHOUT ROWID table")
+	}
+	var integrity string
+	if err := db.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil {
+		t.Fatal(err)
+	}
+	if integrity != "ok" {
+		t.Fatalf("integrity_check = %q, want ok", integrity)
+	}
+}
+
+func TestMinweightStorageEngineUncommittedWriteInvisibleToOtherConnection(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	path := filepath.Join(t.TempDir(), "isolation.db")
+	writer, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, writer)
+	writer.SetMaxOpenConns(1)
+
+	reader, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, reader)
+	reader.SetMaxOpenConns(1)
+
+	execMinweightSQL(t, writer, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT UNIQUE)")
+	execMinweightSQL(t, writer, "INSERT INTO t(id, v) VALUES (1, 'committed')")
+	if got := minweightQueryInt(t, reader, "SELECT count(*) FROM t WHERE v = 'committed'"); got != 1 {
+		t.Fatalf("initial reader rows = %d, want 1", got)
+	}
+
+	tx, err := writer.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("UPDATE t SET v = 'uncommitted-update' WHERE id = 1"); err != nil {
+		t.Fatalf("update in writer transaction: %v", err)
+	}
+	if _, err := tx.Exec("INSERT INTO t(id, v) VALUES (2, 'uncommitted-insert')"); err != nil {
+		t.Fatalf("insert in writer transaction: %v", err)
+	}
+
+	var v string
+	if err := reader.QueryRow("SELECT v FROM t WHERE id = 1").Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	if v != "committed" {
+		t.Fatalf("reader saw id=1 value %q before commit, want committed", v)
+	}
+	if got := minweightQueryInt(t, reader, "SELECT count(*) FROM t WHERE id = 2"); got != 0 {
+		t.Fatalf("reader saw uncommitted insert count = %d, want 0", got)
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.QueryRow("SELECT v FROM t WHERE id = 1").Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	if v != "uncommitted-update" {
+		t.Fatalf("reader saw id=1 value %q after commit, want uncommitted-update", v)
+	}
+	if got := minweightQueryInt(t, reader, "SELECT count(*) FROM t WHERE id = 2"); got != 1 {
+		t.Fatalf("reader saw committed insert count = %d, want 1", got)
+	}
+
+	tx, err = writer.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("UPDATE t SET v = 'rolled-back-update' WHERE id = 1"); err != nil {
+		t.Fatalf("rollback update in writer transaction: %v", err)
+	}
+	if _, err := tx.Exec("INSERT INTO t(id, v) VALUES (3, 'rolled-back-insert')"); err != nil {
+		t.Fatalf("rollback insert in writer transaction: %v", err)
+	}
+	if err := reader.QueryRow("SELECT v FROM t WHERE id = 1").Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	if v != "uncommitted-update" {
+		t.Fatalf("reader saw id=1 value %q before rollback, want uncommitted-update", v)
+	}
+	if got := minweightQueryInt(t, reader, "SELECT count(*) FROM t WHERE id = 3"); got != 0 {
+		t.Fatalf("reader saw rolled-back insert count = %d, want 0", got)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.QueryRow("SELECT v FROM t WHERE id = 1").Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	if v != "uncommitted-update" {
+		t.Fatalf("reader saw id=1 value %q after rollback, want uncommitted-update", v)
+	}
+	if got := minweightQueryInt(t, reader, "SELECT count(*) FROM t WHERE id = 3"); got != 0 {
+		t.Fatalf("reader saw rolled-back insert after rollback count = %d, want 0", got)
+	}
+}
+
+func TestMinweightStorageEngineRejectsConcurrentWriters(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	path := filepath.Join(t.TempDir(), "writers.db")
+	first, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, first)
+	first.SetMaxOpenConns(1)
+
+	second, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, second)
+	second.SetMaxOpenConns(1)
+
+	execMinweightSQL(t, first, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, first, "INSERT INTO t(id, v) VALUES (1, 'one')")
+
+	tx, err := first.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rollbackMinweightTx(t, tx)
+	if _, err := tx.Exec("UPDATE t SET v = 'writer-one' WHERE id = 1"); err != nil {
+		t.Fatalf("first writer update: %v", err)
+	}
+
+	_, err = second.Exec("INSERT INTO t(id, v) VALUES (2, 'writer-two')")
+	if err == nil {
+		t.Fatal("second writer succeeded while first writer was active")
+	}
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		t.Fatalf("second writer error = %T %v, want sqlite.Error", err, err)
+	}
+	if sqliteErr.Code() != sqlite3.SQLITE_BUSY {
+		t.Fatalf("second writer code = %d, want SQLITE_BUSY", sqliteErr.Code())
+	}
+	if got := minweightQueryInt(t, second, "SELECT count(*) FROM t WHERE id = 2"); got != 0 {
+		t.Fatalf("second writer row count = %d, want 0", got)
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	execMinweightSQL(t, second, "INSERT INTO t(id, v) VALUES (2, 'writer-two')")
+	if got := minweightQueryInt(t, first, "SELECT count(*) FROM t WHERE id = 2"); got != 1 {
+		t.Fatalf("second writer row count after first commit = %d, want 1", got)
+	}
+}
+
+func TestMinweightStorageEngineBusyTimeoutWaitsForWriter(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	path := filepath.Join(t.TempDir(), "writer-timeout.db")
+	first, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, first)
+	first.SetMaxOpenConns(1)
+
+	second, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, second)
+	second.SetMaxOpenConns(1)
+
+	execMinweightSQL(t, first, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, first, "INSERT INTO t(id, v) VALUES (1, 'one')")
+	execMinweightSQL(t, second, "PRAGMA busy_timeout=2000")
+
+	tx, err := first.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rollbackMinweightTx(t, tx)
+	if _, err := tx.Exec("UPDATE t SET v = 'writer-one' WHERE id = 1"); err != nil {
+		t.Fatalf("first writer update: %v", err)
+	}
+
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		_, err := second.Exec("INSERT INTO t(id, v) VALUES (2, 'writer-two')")
+		done <- err
+	}()
+	<-started
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("second writer completed before first writer committed")
+		}
+		t.Fatalf("second writer returned before first writer committed: %v", err)
+	default:
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("second writer after first commit: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("second writer did not finish after first writer committed")
+	}
+	if got := minweightQueryInt(t, first, "SELECT count(*) FROM t WHERE id = 2"); got != 1 {
+		t.Fatalf("second writer row count = %d, want 1", got)
+	}
+}
+
+func TestMinweightStorageEngineOpenReadCursorBlocksWriterCommit(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	path := filepath.Join(t.TempDir(), "reader-cursor.db")
+	writer, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, writer)
+	writer.SetMaxOpenConns(1)
+
+	reader, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, reader)
+	reader.SetMaxOpenConns(1)
+
+	execMinweightSQL(t, writer, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, writer, "INSERT INTO t(id, v) VALUES (1, 'one')")
+
+	rows, err := reader.Query("SELECT id, v FROM t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rows.Next() {
+		closeMinweightRows(t, rows)
+		t.Fatal("reader cursor returned no rows")
+	}
+	var id int
+	var v string
+	if err := rows.Scan(&id, &v); err != nil {
+		closeMinweightRows(t, rows)
+		t.Fatal(err)
+	}
+	if id != 1 || v != "one" {
+		closeMinweightRows(t, rows)
+		t.Fatalf("reader first row = (%d, %q), want (1, one)", id, v)
+	}
+
+	tx, err := writer.Begin()
+	if err != nil {
+		closeMinweightRows(t, rows)
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("INSERT INTO t(id, v) VALUES (2, 'two')"); err != nil {
+		closeMinweightRows(t, rows)
+		rollbackMinweightTx(t, tx)
+		t.Fatalf("writer insert: %v", err)
+	}
+	err = tx.Commit()
+	if err == nil {
+		closeMinweightRows(t, rows)
+		t.Fatal("writer commit succeeded while reader cursor was open")
+	}
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		closeMinweightRows(t, rows)
+		t.Fatalf("writer commit error = %T %v, want sqlite.Error", err, err)
+	}
+	if sqliteErr.Code() != sqlite3.SQLITE_BUSY {
+		closeMinweightRows(t, rows)
+		t.Fatalf("writer commit code = %d, want SQLITE_BUSY", sqliteErr.Code())
+	}
+	closeMinweightRows(t, rows)
+	if got := minweightQueryInt(t, writer, "SELECT count(*) FROM t WHERE id = 2"); got != 0 {
+		t.Fatalf("row committed after busy commit = %d, want 0", got)
+	}
+
+	execMinweightSQL(t, writer, "INSERT INTO t(id, v) VALUES (2, 'two')")
+	if got := minweightQueryInt(t, reader, "SELECT count(*) FROM t WHERE id = 2"); got != 1 {
+		t.Fatalf("row count after reader cursor close = %d, want 1", got)
+	}
+}
+
+func TestMinweightStorageEngineTableCursorSeekSkipsRowidGapsAndOverlay(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, db)
+
+	execMinweightSQL(t, db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, db, "INSERT INTO t(id, v) VALUES (-1000000000000, 'low'), (1, 'one'), (1000000000000, 'high')")
+
+	wantAsc := []string{"-1000000000000:low", "1:one", "1000000000000:high"}
+	if got := minweightRowStrings(t, db); !reflect.DeepEqual(got, wantAsc) {
+		t.Fatalf("initial rows = %v, want %v", got, wantAsc)
+	}
+	wantDesc := []string{"1000000000000:high", "1:one", "-1000000000000:low"}
+	if got := minweightQueryStrings(t, db, "SELECT printf('%lld:%s', id, v) FROM t NOT INDEXED ORDER BY id DESC"); !reflect.DeepEqual(got, wantDesc) {
+		t.Fatalf("initial desc rows = %v, want %v", got, wantDesc)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("DELETE FROM t WHERE id = 1"); err != nil {
+		t.Fatalf("delete in tx: %v", err)
+	}
+	if _, err := tx.Exec("INSERT INTO t(id, v) VALUES (50, 'mid')"); err != nil {
+		t.Fatalf("insert in tx: %v", err)
+	}
+	if _, err := tx.Exec("UPDATE t SET v = 'highest' WHERE id = 1000000000000"); err != nil {
+		t.Fatalf("update in tx: %v", err)
+	}
+	wantTxAsc := []string{"-1000000000000:low", "50:mid", "1000000000000:highest"}
+	if got := minweightTxQueryStrings(t, tx, "SELECT printf('%lld:%s', id, v) FROM t NOT INDEXED ORDER BY id"); !reflect.DeepEqual(got, wantTxAsc) {
+		t.Fatalf("tx asc rows = %v, want %v", got, wantTxAsc)
+	}
+	wantTxDesc := []string{"1000000000000:highest", "50:mid", "-1000000000000:low"}
+	if got := minweightTxQueryStrings(t, tx, "SELECT printf('%lld:%s', id, v) FROM t NOT INDEXED ORDER BY id DESC"); !reflect.DeepEqual(got, wantTxDesc) {
+		t.Fatalf("tx desc rows = %v, want %v", got, wantTxDesc)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if got := minweightRowStrings(t, db); !reflect.DeepEqual(got, wantAsc) {
+		t.Fatalf("rows after rollback = %v, want %v", got, wantAsc)
+	}
+}
+
+func TestStorageEngineOpenConnectionsKeepBoundEngineAfterGlobalSwitch(t *testing.T) {
+	sqlite.SetStorageEngine(sqlite.NewMinweightStorageEngine())
+	t.Cleanup(func() { sqlite.SetStorageEngine(nil) })
+
+	minweightDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, minweightDB)
+	execMinweightSQL(t, minweightDB, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, minweightDB, "INSERT INTO t VALUES (1, 'minweight')")
+
+	sqlite.SetStorageEngine(nil)
+	if got := minweightQueryInt(t, minweightDB, "SELECT count(*) FROM t WHERE v = 'minweight'"); got != 1 {
+		t.Fatalf("minweight rows after switching global engine to native = %d, want 1", got)
+	}
+
+	nativeDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, nativeDB)
+	if _, err := nativeDB.Exec("CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nativeDB.Exec("INSERT INTO t VALUES (1, 'native')"); err != nil {
+		t.Fatal(err)
+	}
+
+	sqlite.SetStorageEngine(sqlite.NewMinweightStorageEngine())
+	var nativeCount int64
+	if err := nativeDB.QueryRow("SELECT count(*) FROM t WHERE v = 'native'").Scan(&nativeCount); err != nil {
+		t.Fatal(err)
+	}
+	if nativeCount != 1 {
+		t.Fatalf("native rows after switching global engine to minweight = %d, want 1", nativeCount)
+	}
+	if got := minweightQueryInt(t, minweightDB, "SELECT count(*) FROM t WHERE v = 'minweight'"); got != 1 {
+		t.Fatalf("minweight rows after switching global engine again = %d, want 1", got)
 	}
 }
 
@@ -673,7 +1184,127 @@ func TestMinweightStorageEngineDBPageVtabLogicalHeader(t *testing.T) {
 	}
 }
 
-func TestMinweightStorageEngineChmodOnlyReadOnlyOpen(t *testing.T) {
+func TestMinweightStorageEnginePathBackedStorePersistsAcrossEngine(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	path := filepath.Join(t.TempDir(), "persistent.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execMinweightSQL(t, db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, db, "CREATE INDEX t_v ON t(v)")
+	execMinweightSQL(t, db, "PRAGMA user_version = 123")
+	execMinweightSQL(t, db, "INSERT INTO t(id, v) VALUES (1, 'alpha'), (2, 'beta')")
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("path-backed minweight database %s is not a directory", path)
+	}
+
+	sqlite.SetStorageEngine(sqlite.NewMinweightStorageEngine())
+	reopened, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, reopened)
+
+	if got := minweightQueryInt(t, reopened, "PRAGMA user_version"); got != 123 {
+		t.Fatalf("reopened user_version = %d, want 123", got)
+	}
+	if got := minweightQueryInt(t, reopened, "SELECT count(*) FROM t WHERE v >= 'alpha'"); got != 2 {
+		t.Fatalf("reopened row count = %d, want 2", got)
+	}
+	var v string
+	if err := reopened.QueryRow("SELECT v FROM t WHERE v = 'beta'").Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	if v != "beta" {
+		t.Fatalf("reopened indexed lookup = %q, want beta", v)
+	}
+}
+
+func TestMinweightStorageEnginePathBackedRollbackDoesNotPersistOverlay(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	path := filepath.Join(t.TempDir(), "rollback-overlay.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execMinweightSQL(t, db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, db, "INSERT INTO t(id, v) VALUES (1, 'base')")
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("UPDATE t SET v = 'rolled-back' WHERE id = 1"); err != nil {
+		t.Fatalf("update in tx: %v", err)
+	}
+	if _, err := tx.Exec("INSERT INTO t(id, v) VALUES (2, 'transient')"); err != nil {
+		t.Fatalf("insert in tx: %v", err)
+	}
+	if _, err := tx.Exec("CREATE INDEX t_v_transient ON t(v)"); err != nil {
+		t.Fatalf("create index in tx: %v", err)
+	}
+	if _, err := tx.Exec("PRAGMA user_version = 77"); err != nil {
+		t.Fatalf("user_version in tx: %v", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+
+	var v string
+	if err := db.QueryRow("SELECT v FROM t WHERE id = 1").Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	if v != "base" {
+		t.Fatalf("value after rollback = %q, want base", v)
+	}
+	if got := minweightQueryInt(t, db, "SELECT count(*) FROM t WHERE id = 2"); got != 0 {
+		t.Fatalf("transient row count after rollback = %d, want 0", got)
+	}
+	if got := minweightQueryInt(t, db, "SELECT count(*) FROM sqlite_schema WHERE name = 't_v_transient'"); got != 0 {
+		t.Fatalf("transient index count after rollback = %d, want 0", got)
+	}
+	if got := minweightQueryInt(t, db, "PRAGMA user_version"); got != 0 {
+		t.Fatalf("user_version after rollback = %d, want 0", got)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	sqlite.SetStorageEngine(sqlite.NewMinweightStorageEngine())
+	reopened, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, reopened)
+
+	if err := reopened.QueryRow("SELECT v FROM t WHERE id = 1").Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	if v != "base" {
+		t.Fatalf("reopened value after rollback = %q, want base", v)
+	}
+	if got := minweightQueryInt(t, reopened, "SELECT count(*) FROM t WHERE id = 2"); got != 0 {
+		t.Fatalf("reopened transient row count = %d, want 0", got)
+	}
+	if got := minweightQueryInt(t, reopened, "SELECT count(*) FROM sqlite_schema WHERE name = 't_v_transient'"); got != 0 {
+		t.Fatalf("reopened transient index count = %d, want 0", got)
+	}
+	if got := minweightQueryInt(t, reopened, "PRAGMA user_version"); got != 0 {
+		t.Fatalf("reopened user_version = %d, want 0", got)
+	}
+}
+
+func TestMinweightStorageEngineReadOnlyPathOpenFailsFast(t *testing.T) {
 	installMinweightStorageEngineForTest(t)
 
 	path := filepath.Join(t.TempDir(), "readonly.db")
@@ -687,49 +1318,13 @@ func TestMinweightStorageEngineChmodOnlyReadOnlyOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.Chmod(path, 0400); err != nil {
-		t.Skipf("chmod not supported: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.Chmod(path, 0600)
-	})
-	probe, err := os.OpenFile(path, os.O_RDWR, 0)
-	if err == nil {
-		_ = probe.Close()
-		t.Skip("chmod did not restrict write opens on this platform")
-	}
-
-	ro, err := sql.Open("sqlite", path)
+	ro, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro", path))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ro.Close()
-
-	conn, err := ro.Conn(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := conn.Raw(func(dc any) error {
-		readOnly, err := dc.(interface{ IsReadOnly(string) (bool, error) }).IsReadOnly("main")
-		if err != nil {
-			return err
-		}
-		if !readOnly {
-			return fmt.Errorf("IsReadOnly('main') = false, want true")
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := conn.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	if got := minweightQueryInt(t, ro, "SELECT count(*) FROM t WHERE v = 'a'"); got != 1 {
-		t.Fatalf("readonly row count = %d, want 1", got)
-	}
-	if _, err := ro.Exec("INSERT INTO t(v) VALUES ('b')"); err == nil {
-		t.Fatal("readonly insert succeeded, want error")
+	defer closeMinweightDB(t, ro)
+	if err := ro.Ping(); err == nil {
+		t.Fatal("read-only minweight path open succeeded, want fail-fast")
 	}
 }
 
@@ -1337,6 +1932,27 @@ func execMinweightSQL(t *testing.T, db *sql.DB, query string) {
 	}
 }
 
+func closeMinweightDB(t *testing.T, db *sql.DB) {
+	t.Helper()
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func closeMinweightRows(t *testing.T, rows *sql.Rows) {
+	t.Helper()
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func rollbackMinweightTx(t *testing.T, tx *sql.Tx) {
+	t.Helper()
+	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+		t.Fatal(err)
+	}
+}
+
 func minweightQueryInt(t *testing.T, db *sql.DB, query string) int64 {
 	t.Helper()
 	var got int64
@@ -1399,4 +2015,44 @@ func minweightRowStrings(t *testing.T, db *sql.DB) []string {
 		t.Fatal(err)
 	}
 	return got
+}
+
+func minweightQueryStrings(t *testing.T, db *sql.DB, query string) []string {
+	t.Helper()
+	rows, err := db.Query(query)
+	if err != nil {
+		t.Fatalf("%s: %v", query, err)
+	}
+	defer closeMinweightRows(t, rows)
+	return minweightScanStrings(t, rows)
+}
+
+func minweightTxQueryStrings(t *testing.T, tx *sql.Tx, query string) []string {
+	t.Helper()
+	rows, err := tx.Query(query)
+	if err != nil {
+		t.Fatalf("%s: %v", query, err)
+	}
+	defer closeMinweightRows(t, rows)
+	return minweightScanStrings(t, rows)
+}
+
+func minweightScanStrings(t *testing.T, rows *sql.Rows) []string {
+	t.Helper()
+	var got []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, v)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func minweightSQLLiteral(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
