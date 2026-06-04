@@ -525,7 +525,7 @@ func TestMinweightStorageEngineBusyTimeoutWaitsForWriter(t *testing.T) {
 	}
 }
 
-func TestMinweightStorageEngineOpenReadCursorBlocksWriterCommit(t *testing.T) {
+func TestMinweightStorageEngineOpenReadCursorUsesPinnedViewAfterWriterCommit(t *testing.T) {
 	installMinweightStorageEngineForTest(t)
 
 	path := filepath.Join(t.TempDir(), "reader-cursor.db")
@@ -544,9 +544,9 @@ func TestMinweightStorageEngineOpenReadCursorBlocksWriterCommit(t *testing.T) {
 	reader.SetMaxOpenConns(1)
 
 	execMinweightSQL(t, writer, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
-	execMinweightSQL(t, writer, "INSERT INTO t(id, v) VALUES (1, 'one')")
+	execMinweightSQL(t, writer, "INSERT INTO t(id, v) VALUES (1, 'one'), (2, 'two')")
 
-	rows, err := reader.Query("SELECT id, v FROM t")
+	rows, err := reader.Query("SELECT id, v FROM t ORDER BY id")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,33 +570,107 @@ func TestMinweightStorageEngineOpenReadCursorBlocksWriterCommit(t *testing.T) {
 		closeMinweightRows(t, rows)
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec("INSERT INTO t(id, v) VALUES (2, 'two')"); err != nil {
+	if _, err := tx.Exec("UPDATE t SET v = 'updated-two' WHERE id = 2"); err != nil {
+		closeMinweightRows(t, rows)
+		rollbackMinweightTx(t, tx)
+		t.Fatalf("writer update: %v", err)
+	}
+	if _, err := tx.Exec("INSERT INTO t(id, v) VALUES (3, 'three')"); err != nil {
 		closeMinweightRows(t, rows)
 		rollbackMinweightTx(t, tx)
 		t.Fatalf("writer insert: %v", err)
 	}
-	err = tx.Commit()
-	if err == nil {
+	if err := tx.Commit(); err != nil {
 		closeMinweightRows(t, rows)
-		t.Fatal("writer commit succeeded while reader cursor was open")
+		t.Fatalf("writer commit with open read cursor: %v", err)
+	}
+
+	if !rows.Next() {
+		closeMinweightRows(t, rows)
+		t.Fatal("reader cursor returned no second row")
+	}
+	if err := rows.Scan(&id, &v); err != nil {
+		closeMinweightRows(t, rows)
+		t.Fatal(err)
+	}
+	if id != 2 || v != "two" {
+		closeMinweightRows(t, rows)
+		t.Fatalf("reader second row = (%d, %q), want pinned (2, two)", id, v)
+	}
+	if rows.Next() {
+		closeMinweightRows(t, rows)
+		t.Fatal("reader cursor saw row inserted after its pinned generation")
+	}
+	if err := rows.Err(); err != nil {
+		closeMinweightRows(t, rows)
+		t.Fatal(err)
+	}
+	closeMinweightRows(t, rows)
+
+	if got := minweightQueryInt(t, reader, "SELECT count(*) FROM t WHERE id = 3"); got != 1 {
+		t.Fatalf("new reader row count after cursor close = %d, want 1", got)
+	}
+	var updated string
+	if err := reader.QueryRow("SELECT v FROM t WHERE id = 2").Scan(&updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated != "updated-two" {
+		t.Fatalf("new reader id=2 value = %q, want updated-two", updated)
+	}
+}
+
+func TestMinweightStorageEngineExplicitReadTransactionBlocksWriterCommit(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	path := filepath.Join(t.TempDir(), "reader-tx.db")
+	writer, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, writer)
+	writer.SetMaxOpenConns(1)
+
+	reader, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, reader)
+	reader.SetMaxOpenConns(1)
+
+	execMinweightSQL(t, writer, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
+	execMinweightSQL(t, writer, "INSERT INTO t(id, v) VALUES (1, 'one')")
+
+	readTx, err := reader.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rollbackMinweightTx(t, readTx)
+	var v string
+	if err := readTx.QueryRow("SELECT v FROM t WHERE id = 1").Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	if v != "one" {
+		t.Fatalf("read transaction saw %q, want one", v)
+	}
+
+	writeTx, err := writer.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeTx.Exec("INSERT INTO t(id, v) VALUES (2, 'two')"); err != nil {
+		rollbackMinweightTx(t, writeTx)
+		t.Fatalf("writer insert: %v", err)
+	}
+	err = writeTx.Commit()
+	if err == nil {
+		t.Fatal("writer commit succeeded while explicit read transaction was open")
 	}
 	var sqliteErr *sqlite.Error
 	if !errors.As(err, &sqliteErr) {
-		closeMinweightRows(t, rows)
 		t.Fatalf("writer commit error = %T %v, want sqlite.Error", err, err)
 	}
 	if sqliteErr.Code() != sqlite3.SQLITE_BUSY {
-		closeMinweightRows(t, rows)
 		t.Fatalf("writer commit code = %d, want SQLITE_BUSY", sqliteErr.Code())
-	}
-	closeMinweightRows(t, rows)
-	if got := minweightQueryInt(t, writer, "SELECT count(*) FROM t WHERE id = 2"); got != 0 {
-		t.Fatalf("row committed after busy commit = %d, want 0", got)
-	}
-
-	execMinweightSQL(t, writer, "INSERT INTO t(id, v) VALUES (2, 'two')")
-	if got := minweightQueryInt(t, reader, "SELECT count(*) FROM t WHERE id = 2"); got != 1 {
-		t.Fatalf("row count after reader cursor close = %d, want 1", got)
 	}
 }
 

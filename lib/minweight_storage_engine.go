@@ -2444,7 +2444,7 @@ func (bt *minweightBtree) commitPhaseOne(ctx BtreeContext) int32 {
 		busy := false
 		if bt.txnState == SQLITE_TXN_WRITE {
 			for reader := range bt.readers {
-				if reader != bt {
+				if reader != bt && reader.txnState == SQLITE_TXN_READ {
 					busy = true
 					break
 				}
@@ -3311,6 +3311,10 @@ func (e *minweightStorageEngine) BtreeCursor(ctx BtreeContext, p BtreeHandle, iT
 			return rc
 		}
 	}
+	readTracked := wrFlag == 0
+	if readTracked {
+		bt.retainReader()
+	}
 	table, ok := bt.visibleTable(iTable)
 	if !ok {
 		table = minweightTable{intKey: pKeyInfo.IsNil()}
@@ -3333,14 +3337,11 @@ func (e *minweightStorageEngine) BtreeCursor(ctx BtreeContext, p BtreeHandle, iT
 		rawCursor.FcurFlags |= uint8(BTCF_WriteFlag)
 	}
 	cur := &minweightCursor{
-		btree:    bt,
-		root:     iTable,
-		intKey:   table.intKey,
-		writable: wrFlag != 0,
-	}
-	if !cur.writable {
-		bt.retainReader()
-		cur.readTracked = true
+		btree:       bt,
+		root:        iTable,
+		intKey:      table.intKey,
+		writable:    wrFlag != 0,
+		readTracked: readTracked,
 	}
 	e.mu.Lock()
 	e.cursors[pCur.ptr] = cur

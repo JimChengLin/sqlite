@@ -216,9 +216,9 @@ commit 时，`BtreeCommitPhaseOne` 检查其它 reader；有冲突则调用 SQLi
 - database 维护递增 `generation`，每个 committed key/meta/range 有可校验的版本信息。
 - statement reader 或普通 cursor 打开时 pin 当前 generation；关闭 cursor/statement 后 release。旧 generation 只要仍可能被 reader 访问，就作为内存 read view 留住；最后一个 reader release 后清理。
 - writer 记录 `readSet`、`rangeReadSet`、`writeSet` 和 working metadata。读自己的写时走 `writeSet + pinned/base generation` merge。
-- commit phase one 校验 read set/range read set 从 writer base generation 到当前 generation 没被其它已提交 writer 改动；冲突返回 `SQLITE_BUSY`/`SQLITE_LOCKED` 一类 SQLite 可处理错误，不覆盖 committed store。
+- commit phase one 校验 read set/range read set 从 writer base generation 到当前 generation 没被其它已提交 writer 改动；stale snapshot 冲突返回 `SQLITE_BUSY_SNAPSHOT`，不覆盖 committed store。
 - commit phase two 才把 write set 通过 `minweight.Store.WriteBatch` 发布到 minweight_store，并发布新的 in-memory generation。
-- 显式长读事务先不支持：不能让用户以为有完整 MVCC。普通 autocommit statement/read cursor 可以有短生命周期 pinned generation；需要跨多个 statement 保持旧 view 的事务，在实现完整 pin/release 之前应 fail fast 或保持 rollback-journal busy 语义。
+- 显式长读事务先不支持：不能让用户以为有完整 MVCC。普通 autocommit statement/read cursor 已经使用短生命周期 pinned generation；需要跨多个 statement 保持旧 view 的事务继续保持 rollback-journal busy 语义。
 
 shared-cache 锁：
 
@@ -284,7 +284,7 @@ WAL 语义不是 pager hook，而是 transaction view 的策略变化。只有�
 5. adapter view 接口：读路径已经不再用 writer whole-store snapshot 隐藏未提交写；int-key table cursor movement、versioned non-int-key sequential movement、versioned-root `BtreeIndexMoveto` 已经只依赖 `Get`/`SeekGE`/`SeekLE`/`ReverseScanRange` 和 overlay。下一步要把剩余 snapshot read path 换成 generation pin + read/write set validation；显式长读事务先不支持。
 6. 部分完成：seek cursor / root maintenance。int-key table cursor 的 `First`/`Last`/`TableMoveto`/`Next`/`Previous` 已经从 materialized root rows 迁到 `SeekGE`/`SeekLE`；non-int-key 顺序 cursor movement 已经迁到 versioned key 的 `SeekGE`/`ReverseScanRange` 并 merge overlay；versioned index cursor 的 current/last-row anchor 和 `BtreeIndexMoveto` 已经迁到 sortable key seek，cursor 内部不再保留 materialized `rows/index` 状态；这些 cursor movement/positioning 入口已经拆到 `lib/minweight_storage_engine_cursor.go`。stale cursor restore、int-key stats recompute、int-key 和 versioned non-int-key `clearRoot`/`moveRoot` 也已经用 seek 维护；`BtreeCopyFile` 已经从 snapshot/restore 中间层换成 target overlay / `WriteBatch` copy。raw index key 旧格式已删除兼容路径。
 7. 已完成底座：`sqliteComparableKey` 为 index / WITHOUT ROWID btree 生成 versioned physical key。内置存储类、内置 collation 和 DESC 先支持；无法编码的自定义 collation、BIGNULL 和非 UTF-8 KeyInfo fail fast。
-8. 部分完成：optimistic transaction view。当前已有 committed generation、短 reader-view pin、旧 generation key/state retention/prune、pinned-generation point/range/metadata read reconstruction、writer point/range read set、seek-path result-bounded byte-range read set、commit 冲突校验和 direct adapter tests；stale writer read-set/range 冲突返回 `SQLITE_BUSY_SNAPSHOT`，而不是可等待的 generic busy。还缺 SQL statement/cursor 生命周期 pin、SQL 层 `SQLITE_BUSY_SNAPSHOT` 传播覆盖，以及把普通读可见性从 transaction-start snapshot 完整迁到 generation view。显式长读事务在这个能力完整前 fail fast 或保持 rollback-journal busy 语义。
+8. 部分完成：optimistic transaction view。当前已有 committed generation、autocommit cursor 短 reader-view pin、旧 generation key/state retention/prune、pinned-generation point/range/metadata read reconstruction、writer point/range read set、seek-path result-bounded byte-range read set、commit 冲突校验和 direct adapter tests；ordinary open read cursor 不再阻塞 writer commit，会继续读 pinned old view；显式 read transaction 仍保持 rollback-journal `SQLITE_BUSY` 语义。还缺 SQL 层 `SQLITE_BUSY_SNAPSHOT` 传播覆盖，以及把剩余普通读可见性从 transaction-start snapshot 完整迁到 generation view。
 9. 已完成：raw index key 策略。这个项目还没有发布，所以不保留旧 raw key 兼容；新写入始终使用 versioned `sqliteComparableKey`，旧 raw key 直接 fail fast。
 10. 在 transaction view 之后再做 WAL 逻辑模式：`PRAGMA journal_mode=WAL` 只改变 reader/writer commit policy 和 view 生命周期，不创建真实 WAL frame。没有稳定旧 view 时返回 delete 或 unsupported。
 11. 最后补逻辑 backup/serialize、constraints/triggers/incremental blob 和 shared-cache 边界测试；page-image、VFS、mmap、dbpage 继续留在低优先级 shim。
@@ -366,7 +366,7 @@ TEST_PARALLEL=8 ./test-storage-engine.sh
 - 多连接 committed-view 可见性：writer 未提交的 update/insert 对其它连接不可见，commit 后可见，rollback 后保持不可见。
 - 单 writer 协议：已有 writer 未结束时，第二个 writer 返回 `SQLITE_BUSY`，不能覆盖 active writer 或 direct-write 到 committed store。
 - busy handler：第二个 writer 设置 `PRAGMA busy_timeout` 后，会通过 SQLite busy handler 等待 active writer 释放；超时前释放则写入成功。
-- statement reader 边界：普通 `SELECT` rows 未关闭时，writer commit 返回 `SQLITE_BUSY`；失败 commit 后写集不能漏出，关闭 rows 后 writer 可继续提交。
+- statement reader 边界：普通 autocommit `SELECT` rows 未关闭时，writer commit 可以成功；open rows 继续读取 pinned old view，看不到 commit 后的 update/insert。显式 read transaction 仍让 writer commit 返回 `SQLITE_BUSY`。
 - path-backed minweight store close/reopen 持久化，且新 engine 进程内状态为空时仍能读取旧数据、schema、index lookup 和 `PRAGMA user_version`。
 - read-only path open fail-fast：`mode=ro` 不再通过 placeholder 冒充支持。
 - sortable index key adapter 单测：覆盖 SQLite storage class 顺序、INTEGER/REAL 数值编码、TEXT/BLOB 分界、`BINARY`/`NOCASE`/`RTRIM`、DESC、versioned store key 解码，以及 unsupported custom collation fail-fast。
@@ -377,7 +377,7 @@ TEST_PARALLEL=8 ./test-storage-engine.sh
 
 - writer overlay 未提交不可见
 - commit phase two 后新 reader 可见
-- reader 活跃时 writer commit 返回 busy 或走 busy handler
+- autocommit reader cursor 活跃时 writer commit 成功且 reader 继续旧 view；显式 read transaction 活跃时 writer commit 返回 busy
 - rollback / savepoint / statement rollback 只回滚本事务写集
 - index ordering/lookup/collation
 - backup/restore/serialize round-trip
@@ -387,8 +387,8 @@ TEST_PARALLEL=8 ./test-storage-engine.sh
 
 ## 当前结论
 
-目前已经完成的是：SQLite btree API 可以 dispatch 到 minweight，handle 绑定不再依赖进程级全局开关，path-backed database 会真实打开 minweight_store 目录并在最后一个 handle 关闭时 `Store.Close()`，逻辑 metadata 也会随 store 持久化；competing writer 和 open statement reader 会让 writer 返回 `SQLITE_BUSY`，busy handler 可等待 active writer 释放，不会覆盖 active writer 或漏出失败 commit 的写集；index/WITHOUT ROWID 新写入已经使用 versioned `sqliteComparableKey` 物理 key，value 保留原始 SQLite record；non-int-key sequential cursor movement 和 versioned-root `BtreeIndexMoveto` 已经用 seek/range API。
+目前已经完成的是：SQLite btree API 可以 dispatch 到 minweight，handle 绑定不再依赖进程级全局开关，path-backed database 会真实打开 minweight_store 目录并在最后一个 handle 关闭时 `Store.Close()`，逻辑 metadata 也会随 store 持久化；competing writer 会返回 `SQLITE_BUSY`，busy handler 可等待 active writer 释放；ordinary open statement reader 会 pin old view 而不阻塞 writer commit，显式 read transaction 仍会阻塞 writer commit；index/WITHOUT ROWID 新写入已经使用 versioned `sqliteComparableKey` 物理 key，value 保留原始 SQLite record；non-int-key sequential cursor movement 和 versioned-root `BtreeIndexMoveto` 已经用 seek/range API。
 
-目前没有完成的是：SQL 生命周期级 generation pin、完整 reader/writer lock protocol、剩余 root-scoped copy 流程的 range/batch 维护、物理 page file、真实 WAL、mmap、writable VFS，以及完整 `sqlite_dbpage` 页面模型。
+目前没有完成的是：完整 SQL 生命周期级 generation pin（尤其显式事务和少数剩余 read path）、完整 reader/writer lock protocol、剩余 root-scoped copy 流程的 range/batch 维护、物理 page file、真实 WAL、mmap、writable VFS，以及完整 `sqlite_dbpage` 页面模型。
 
-下一步如果目标是“行为对齐 btree”，第一优先级继续是 optimistic transaction view 和 SQL 生命周期 pin：versioned 新写入路径已经能 seek，raw key 旧格式已经 fail fast，正常 cursor movement 已经没有 `loadRows()` / `refreshCursorRows()`，`Get`、table/versioned-index range seek、metadata state 已经能按 pinned/base generation 重建旧视图，`BtreeIntegrityCheck` 已经不再复制整库 snapshot，`BtreeCopyFile` 已经用 batch/overlay 替代 snapshot/restore，剩下要把普通读生命周期完整迁到 generation pin + read/write set validation。
+下一步如果目标是“行为对齐 btree”，第一优先级继续是 optimistic transaction view 的 SQL 层冲突传播和剩余读路径：versioned 新写入路径已经能 seek，raw key 旧格式已经 fail fast，正常 cursor movement 已经没有 `loadRows()` / `refreshCursorRows()`，`Get`、table/versioned-index range seek、metadata state 已经能按 pinned/base generation 重建旧视图，ordinary read cursor 已经 pin/release generation，`BtreeIntegrityCheck` 已经不再复制整库 snapshot，`BtreeCopyFile` 已经用 batch/overlay 替代 snapshot/restore，剩下要把 stale writer conflict 的 SQL 层 `SQLITE_BUSY_SNAPSHOT` 覆盖和少数 transaction-start read path 收完。
