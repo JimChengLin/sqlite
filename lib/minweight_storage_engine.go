@@ -1572,12 +1572,14 @@ func (bt *minweightBtree) delete(key []byte) (bool, error) {
 			bt.mu.Unlock()
 			return existed, nil
 		}
+		generation := bt.readGenerationLocked()
 		bt.mu.Unlock()
-		_, existed, err := bt.store.Get(key)
+		value, existed, err := bt.store.Get(key)
 		if err != nil {
 			return false, err
 		}
 		bt.mu.Lock()
+		_, existed = bt.valueAtGenerationLocked(key, value, existed, generation)
 		if tx := bt.activeTxnLocked(); tx != nil {
 			tx.reads[keyString] = struct{}{}
 			tx.writes[keyString] = minweightTxnWrite{
@@ -1720,17 +1722,6 @@ func minweightIndexRowFromItem(root uint32, item minweight.Item) (minweightRow, 
 	return minweightDecodeRow(item, false), true
 }
 
-func (bt *minweightBtree) txnWriteForKey(key []byte) (minweightTxnWrite, bool) {
-	bt.mu.Lock()
-	defer bt.mu.Unlock()
-	tx := bt.activeTxnLocked()
-	if tx == nil {
-		return minweightTxnWrite{}, false
-	}
-	write, ok := tx.writes[string(key)]
-	return write, ok
-}
-
 func (bt *minweightBtree) indexOverlayCandidate(root uint32, target []byte, ge bool, strict bool) (minweightRow, bool) {
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
@@ -1849,7 +1840,13 @@ func (bt *minweightBtree) noteSeekLERange(noResultLower []byte, upper []byte, ro
 }
 
 func (bt *minweightBtree) seekIndexGE(root uint32, target []byte, strict bool) (minweightRow, bool, error) {
+	generation := bt.readGeneration()
 	overlayRow, overlayOK := bt.indexOverlayCandidate(root, target, true, strict)
+	historyRow, historyOK, err := bt.indexGenerationCandidate(root, target, true, strict, generation)
+	if err != nil {
+		return minweightRow{}, false, err
+	}
+	candidate, candidateOK := minweightBetterIndexGERow(overlayRow, overlayOK, historyRow, historyOK)
 	seekKey := append([]byte(nil), target...)
 	if strict {
 		seekKey = minweightIndexSeekAfter(seekKey)
@@ -1862,36 +1859,43 @@ func (bt *minweightBtree) seekIndexGE(root uint32, target []byte, strict bool) (
 			return minweightRow{}, false, err
 		}
 		if !ok || bytes.Compare(item.Key, upper) >= 0 {
-			bt.noteSeekGERange(readLower, upper, overlayRow, overlayOK)
-			return overlayRow, overlayOK, nil
+			bt.noteSeekGERange(readLower, upper, candidate, candidateOK)
+			return candidate, candidateOK, nil
 		}
 		if !minweightIndexKeyInVersionedRange(root, item.Key) {
-			bt.noteSeekGERange(readLower, upper, overlayRow, overlayOK)
-			return overlayRow, overlayOK, nil
+			bt.noteSeekGERange(readLower, upper, candidate, candidateOK)
+			return candidate, candidateOK, nil
 		}
-		if _, ok := bt.txnWriteForKey(item.Key); ok {
+		value, visible := bt.valueForStoreItemAtGeneration(item, generation)
+		if !visible {
 			seekKey = minweightIndexSeekAfter(item.Key)
 			continue
 		}
-		baseRow, ok := minweightIndexRowFromItem(root, item)
+		baseRow, ok := minweightIndexRowFromItem(root, minweight.Item{Key: item.Key, Value: value})
 		if !ok {
-			bt.noteSeekGERange(readLower, upper, overlayRow, overlayOK)
-			return overlayRow, overlayOK, nil
+			bt.noteSeekGERange(readLower, upper, candidate, candidateOK)
+			return candidate, candidateOK, nil
 		}
-		row, rowOK := minweightBetterIndexGERow(baseRow, true, overlayRow, overlayOK)
+		row, rowOK := minweightBetterIndexGERow(baseRow, true, candidate, candidateOK)
 		bt.noteSeekGERange(readLower, upper, row, rowOK)
 		return row, rowOK, nil
 	}
 }
 
 func (bt *minweightBtree) seekIndexLE(root uint32, target []byte, strict bool) (minweightRow, bool, error) {
+	generation := bt.readGeneration()
 	overlayRow, overlayOK := bt.indexOverlayCandidate(root, target, false, strict)
+	historyRow, historyOK, err := bt.indexGenerationCandidate(root, target, false, strict, generation)
+	if err != nil {
+		return minweightRow{}, false, err
+	}
+	candidate, candidateOK := minweightBetterIndexLERow(overlayRow, overlayOK, historyRow, historyOK)
 	lower := minweightVersionedIndexLower(root)
 	upper := minweightIndexReadUpper(target, minweightVersionedIndexUpper(root), strict)
 	var baseRow minweightRow
 	baseOK := false
 	var scanErr error
-	err := bt.store.ReverseScanRange(target, minweightRootPrefix(root, false), func(item minweight.Item) bool {
+	err = bt.store.ReverseScanRange(target, minweightRootPrefix(root, false), func(item minweight.Item) bool {
 		if bytes.Compare(item.Key, lower) < 0 {
 			return false
 		}
@@ -1901,11 +1905,12 @@ func (bt *minweightBtree) seekIndexLE(root uint32, target []byte, strict bool) (
 		if !minweightIndexKeyInVersionedRange(root, item.Key) {
 			return false
 		}
-		if _, ok := bt.txnWriteForKey(item.Key); ok {
+		value, visible := bt.valueForStoreItemAtGeneration(item, generation)
+		if !visible {
 			return true
 		}
 		var ok bool
-		baseRow, ok = minweightIndexRowFromItem(root, item)
+		baseRow, ok = minweightIndexRowFromItem(root, minweight.Item{Key: item.Key, Value: value})
 		if !ok {
 			scanErr = fmt.Errorf("minweight sqlite index key: corrupt versioned index key")
 			return false
@@ -1919,13 +1924,19 @@ func (bt *minweightBtree) seekIndexLE(root uint32, target []byte, strict bool) (
 	if scanErr != nil {
 		return minweightRow{}, false, scanErr
 	}
-	row, rowOK := minweightBetterIndexLERow(baseRow, baseOK, overlayRow, overlayOK)
+	row, rowOK := minweightBetterIndexLERow(baseRow, baseOK, candidate, candidateOK)
 	bt.noteSeekLERange(lower, upper, row, rowOK)
 	return row, rowOK, nil
 }
 
 func (bt *minweightBtree) seekTableGE(root uint32, target int64) (minweightRow, bool, error) {
+	generation := bt.readGeneration()
 	overlayRow, overlayOK := bt.tableOverlayCandidate(root, target, true)
+	historyRow, historyOK, err := bt.tableGenerationCandidate(root, target, true, generation)
+	if err != nil {
+		return minweightRow{}, false, err
+	}
+	candidate, candidateOK := minweightBetterTableGERow(overlayRow, overlayOK, historyRow, historyOK)
 	seekKey := minweightTableKey(root, target)
 	readLower := append([]byte(nil), seekKey...)
 	upper := minweightPrefixUpper(minweightRootPrefix(root, true))
@@ -1935,35 +1946,42 @@ func (bt *minweightBtree) seekTableGE(root uint32, target int64) (minweightRow, 
 			return minweightRow{}, false, err
 		}
 		if !ok {
-			bt.noteSeekGERange(readLower, upper, overlayRow, overlayOK)
-			return overlayRow, overlayOK, nil
+			bt.noteSeekGERange(readLower, upper, candidate, candidateOK)
+			return candidate, candidateOK, nil
 		}
 		itemRoot, rowid, ok := minweightTableRootRowid(item.Key)
 		if !ok || itemRoot != root {
-			bt.noteSeekGERange(readLower, upper, overlayRow, overlayOK)
-			return overlayRow, overlayOK, nil
+			bt.noteSeekGERange(readLower, upper, candidate, candidateOK)
+			return candidate, candidateOK, nil
 		}
-		if _, ok := bt.txnWriteForKey(item.Key); ok {
+		value, visible := bt.valueForStoreItemAtGeneration(item, generation)
+		if !visible {
 			if rowid == math.MaxInt64 {
-				bt.noteSeekGERange(readLower, upper, overlayRow, overlayOK)
-				return overlayRow, overlayOK, nil
+				bt.noteSeekGERange(readLower, upper, candidate, candidateOK)
+				return candidate, candidateOK, nil
 			}
 			seekKey = minweightTableKey(root, rowid+1)
 			continue
 		}
-		baseRow, ok := minweightTableRowFromItem(root, item)
+		baseRow, ok := minweightTableRowFromItem(root, minweight.Item{Key: item.Key, Value: value})
 		if !ok {
-			bt.noteSeekGERange(readLower, upper, overlayRow, overlayOK)
-			return overlayRow, overlayOK, nil
+			bt.noteSeekGERange(readLower, upper, candidate, candidateOK)
+			return candidate, candidateOK, nil
 		}
-		row, rowOK := minweightBetterTableGERow(baseRow, true, overlayRow, overlayOK)
+		row, rowOK := minweightBetterTableGERow(baseRow, true, candidate, candidateOK)
 		bt.noteSeekGERange(readLower, upper, row, rowOK)
 		return row, rowOK, nil
 	}
 }
 
 func (bt *minweightBtree) seekTableLE(root uint32, target int64) (minweightRow, bool, error) {
+	generation := bt.readGeneration()
 	overlayRow, overlayOK := bt.tableOverlayCandidate(root, target, false)
+	historyRow, historyOK, err := bt.tableGenerationCandidate(root, target, false, generation)
+	if err != nil {
+		return minweightRow{}, false, err
+	}
+	candidate, candidateOK := minweightBetterTableLERow(overlayRow, overlayOK, historyRow, historyOK)
 	seekKey := minweightTableKey(root, target)
 	readLower := minweightRootPrefix(root, true)
 	upper := minweightIndexSeekAfter(seekKey)
@@ -1973,28 +1991,29 @@ func (bt *minweightBtree) seekTableLE(root uint32, target int64) (minweightRow, 
 			return minweightRow{}, false, err
 		}
 		if !ok {
-			bt.noteSeekLERange(readLower, upper, overlayRow, overlayOK)
-			return overlayRow, overlayOK, nil
+			bt.noteSeekLERange(readLower, upper, candidate, candidateOK)
+			return candidate, candidateOK, nil
 		}
 		itemRoot, rowid, ok := minweightTableRootRowid(item.Key)
 		if !ok || itemRoot != root {
-			bt.noteSeekLERange(readLower, upper, overlayRow, overlayOK)
-			return overlayRow, overlayOK, nil
+			bt.noteSeekLERange(readLower, upper, candidate, candidateOK)
+			return candidate, candidateOK, nil
 		}
-		if _, ok := bt.txnWriteForKey(item.Key); ok {
+		value, visible := bt.valueForStoreItemAtGeneration(item, generation)
+		if !visible {
 			if rowid == math.MinInt64 {
-				bt.noteSeekLERange(readLower, upper, overlayRow, overlayOK)
-				return overlayRow, overlayOK, nil
+				bt.noteSeekLERange(readLower, upper, candidate, candidateOK)
+				return candidate, candidateOK, nil
 			}
 			seekKey = minweightTableKey(root, rowid-1)
 			continue
 		}
-		baseRow, ok := minweightTableRowFromItem(root, item)
+		baseRow, ok := minweightTableRowFromItem(root, minweight.Item{Key: item.Key, Value: value})
 		if !ok {
-			bt.noteSeekLERange(readLower, upper, overlayRow, overlayOK)
-			return overlayRow, overlayOK, nil
+			bt.noteSeekLERange(readLower, upper, candidate, candidateOK)
+			return candidate, candidateOK, nil
 		}
-		row, rowOK := minweightBetterTableLERow(baseRow, true, overlayRow, overlayOK)
+		row, rowOK := minweightBetterTableLERow(baseRow, true, candidate, candidateOK)
 		bt.noteSeekLERange(readLower, upper, row, rowOK)
 		return row, rowOK, nil
 	}
