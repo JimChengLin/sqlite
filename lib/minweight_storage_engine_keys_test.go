@@ -54,7 +54,7 @@ func TestMinweightIndexStoreKeyWithoutKeyInfoUsesVersionedKey(t *testing.T) {
 	}
 }
 
-func TestMinweightLoadRowsRejectsLegacyRawIndexKey(t *testing.T) {
+func TestMinweightStatsRejectLegacyRawIndexKey(t *testing.T) {
 	h := newMinweightBtreeTestHarness(t)
 	root := uint32(2)
 	h.bt.tables[root] = minweightTable{intKey: false}
@@ -63,7 +63,7 @@ func TestMinweightLoadRowsRejectsLegacyRawIndexKey(t *testing.T) {
 	if err := h.bt.store.Put(rawKey, record); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.bt.loadRows(root, false); !errors.Is(err, minweight.ErrManifest) {
-		t.Fatalf("loadRows error = %v, want minweight.ErrManifest", err)
+	if err := h.bt.recomputeTableStats(); !errors.Is(err, minweight.ErrManifest) {
+		t.Fatalf("recomputeTableStats error = %v, want minweight.ErrManifest", err)
 	}
 }

@@ -121,9 +121,11 @@ func TestMinweightIndexNextFromMaterializedStaleCursorUsesSeek(t *testing.T) {
 	}
 	cursor := h.indexCursor(t, root, keyInfo)
 	cur := h.engine.cursor(cursor)
-	if rc := h.engine.refreshCursorRows(h.ctx, cursor, cur); rc != SQLITE_OK {
-		t.Fatalf("refreshCursorRows rc = %d, want SQLITE_OK", rc)
+	cur.rows = []minweightRow{
+		{key: recordA, storeKey: keyA, payload: recordA},
+		{key: recordB, storeKey: keyB, payload: recordB},
 	}
+	cur.dataVer = h.bt.visibleDataVer()
 	if len(cur.rows) != 2 {
 		t.Fatalf("materialized rows = %d, want 2", len(cur.rows))
 	}
@@ -164,9 +166,11 @@ func TestMinweightIndexPreviousFromMaterializedStaleCursorUsesSeek(t *testing.T)
 	}
 	cursor := h.indexCursor(t, root, keyInfo)
 	cur := h.engine.cursor(cursor)
-	if rc := h.engine.refreshCursorRows(h.ctx, cursor, cur); rc != SQLITE_OK {
-		t.Fatalf("refreshCursorRows rc = %d, want SQLITE_OK", rc)
+	cur.rows = []minweightRow{
+		{key: recordA, storeKey: keyA, payload: recordA},
+		{key: recordB, storeKey: keyB, payload: recordB},
 	}
+	cur.dataVer = h.bt.visibleDataVer()
 	if len(cur.rows) != 2 {
 		t.Fatalf("materialized rows = %d, want 2", len(cur.rows))
 	}
@@ -207,9 +211,11 @@ func TestMinweightIndexNextFromStaleOldIndexUsesSeek(t *testing.T) {
 	}
 	cursor := h.indexCursor(t, root, keyInfo)
 	cur := h.engine.cursor(cursor)
-	if rc := h.engine.refreshCursorRows(h.ctx, cursor, cur); rc != SQLITE_OK {
-		t.Fatalf("refreshCursorRows rc = %d, want SQLITE_OK", rc)
+	cur.rows = []minweightRow{
+		{key: recordA, storeKey: keyA, payload: recordA},
+		{key: recordB, storeKey: keyB, payload: recordB},
 	}
+	cur.dataVer = h.bt.visibleDataVer()
 	cur.valid = false
 	cur.index = len(cur.rows)
 
@@ -246,9 +252,11 @@ func TestMinweightIndexEofFromStaleOldIndexUsesSeek(t *testing.T) {
 	}
 	cursor := h.indexCursor(t, root, keyInfo)
 	cur := h.engine.cursor(cursor)
-	if rc := h.engine.refreshCursorRows(h.ctx, cursor, cur); rc != SQLITE_OK {
-		t.Fatalf("refreshCursorRows rc = %d, want SQLITE_OK", rc)
+	cur.rows = []minweightRow{
+		{key: recordA, storeKey: keyA, payload: recordA},
+		{key: recordB, storeKey: keyB, payload: recordB},
 	}
+	cur.dataVer = h.bt.visibleDataVer()
 	cur.valid = false
 	cur.index = len(cur.rows)
 
@@ -267,4 +275,44 @@ func TestMinweightIndexEofFromStaleOldIndexUsesSeek(t *testing.T) {
 		t.Fatalf("BtreeEof = %d, want 0", got)
 	}
 	h.assertIndexCursorRecord(t, cursor, recordC)
+}
+
+func TestMinweightIndexNextWithoutVersionedStoreKeyFailsFast(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	root := uint32(2)
+	h.bt.tables[root] = minweightTable{intKey: false}
+	keyInfo := minweightTestKeyInfo(t, h.tls, []string{"BINARY"}, nil)
+	record := minweightTestRecord(minweightTestTextRecord("a"))
+	cursor := h.indexCursor(t, root, keyInfo)
+	cur := h.engine.cursor(cursor)
+	cur.rows = []minweightRow{{key: record, payload: record}}
+	cur.valid = true
+	cur.index = 0
+
+	if rc := h.engine.BtreeNext(h.ctx, cursor, 0); rc != SQLITE_CORRUPT {
+		t.Fatalf("BtreeNext rc = %d, want SQLITE_CORRUPT", rc)
+	}
+	if got := cur.faultCode; got != SQLITE_CORRUPT {
+		t.Fatalf("cursor faultCode = %d, want SQLITE_CORRUPT", got)
+	}
+}
+
+func TestMinweightIndexEofWithoutVersionedLastRowMarksCorrupt(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	root := uint32(2)
+	h.bt.tables[root] = minweightTable{intKey: false}
+	keyInfo := minweightTestKeyInfo(t, h.tls, []string{"BINARY"}, nil)
+	record := minweightTestRecord(minweightTestTextRecord("a"))
+	cursor := h.indexCursor(t, root, keyInfo)
+	cur := h.engine.cursor(cursor)
+	cur.valid = false
+	cur.hasLastRow = true
+	cur.lastRow = minweightRow{key: record, payload: record}
+
+	if got := h.engine.BtreeEof(h.ctx, cursor); got != 1 {
+		t.Fatalf("BtreeEof = %d, want 1", got)
+	}
+	if got := cur.faultCode; got != SQLITE_CORRUPT {
+		t.Fatalf("cursor faultCode = %d, want SQLITE_CORRUPT", got)
+	}
 }

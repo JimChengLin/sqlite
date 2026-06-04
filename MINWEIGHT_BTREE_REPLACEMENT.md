@@ -161,7 +161,7 @@ value = SQLite index record bytes
 - `BtreeIndexMoveto` 的最终 compare result 仍来自 SQLite record comparator，避免 adapter 自己重新定义 SQLite record 比较语义。
 - `BtreePayload` / `BtreePayloadFetch` 把当前 row 的 payload 写回 SQLite 期待的内存位置。
 
-cursor 会记录 `dataVer`。写入后 database 的 `dataVer++`，stale table/index cursor restore 已经优先用 point lookup 和 seek 定位回原 row 或相邻 row；versioned index cursor 即使曾经 materialize 成 slice，stale `BtreeNext` / `BtreePrevious` / `BtreeEof` 也会优先按 store key 或旧 slice 里的 versioned 锚点 seek。仍会调用 `refreshCursorRows()` 的是没有可用 versioned store-key 锚点的最后 fallback。
+cursor 会记录 `dataVer`。写入后 database 的 `dataVer++`，stale table/index cursor restore 已经优先用 point lookup 和 seek 定位回原 row 或相邻 row；versioned index cursor 即使曾经 materialize 成 slice，stale `BtreeNext` / `BtreePrevious` / `BtreeEof` 也会按 store key 或旧 slice 里的 versioned 锚点 seek。正常路径不再有 `loadRows()` / `refreshCursorRows()` fallback；没有 versioned store-key 锚点的 index cursor 会 fail fast 为 corrupt，而不是扫描 root。
 
 这也是临时实现。adapter 不应该把当前 root 甚至整库扫出来 materialize 成 `[]minweightRow`，再用 slice index 假装 cursor。
 
@@ -230,8 +230,8 @@ shared-cache 锁：
 当前模型能覆盖单连接 rollback、savepoint rollback、statement rollback、基本多连接 committed-view 可见性、部分 shared-cache 锁和 busy 行为。但它仍有明确问题：
 
 - 显式长读事务还没有稳定 read view；在上面的 generation pin 模型落地前，不支持长事务。
-- raw index key 旧格式已经不支持；open/stat recompute、fallback row loading 和 integrity check 会把它视为 corrupt，而不是隐藏地 materialize。
-- 仍有少数 versioned root fallback 会 materialize rows，例如兼容性 cursor restore、backup/copy-style whole-root 流程和部分统计/检查路径。
+- raw index key 旧格式已经不支持；open/stat recompute 和 integrity check 会把它视为 corrupt，而不是隐藏地 materialize。
+- 剩余整库/整 root 扫描主要在 snapshot、integrity/check 和替换 whole-btree 的 copy 类路径；正常 cursor movement 不再 materialize root rows。
 - WAL 只能等 stable read view 后做逻辑事务模式，不能假装有 SQLite WAL frame。
 
 因此下一步不是补 pager/VFS/dbpage shim，而是把 read/write set validation、in-memory generation pin 和剩余 whole-root rewrite 补上。
@@ -391,4 +391,4 @@ TEST_PARALLEL=8 ./test-storage-engine.sh
 
 目前没有完成的是：byte-range read set 和 SQL 生命周期级 generation pin、完整 reader/writer lock protocol、剩余 root-scoped copy/check 流程的 range/batch 维护、物理 page file、真实 WAL、mmap、writable VFS，以及完整 `sqlite_dbpage` 页面模型。
 
-下一步如果目标是“行为对齐 btree”，第一优先级转为 optimistic transaction view 和剩余 root-scoped fallback：versioned 新写入路径已经能 seek，raw key 旧格式已经 fail fast，`BtreeCopyFile` 已经用 batch/overlay 替代 snapshot/restore，剩下要把剩余 snapshot 隔离改成 generation pin + read/write set validation，并继续把 copy/check 类路径换成 range/batch。
+下一步如果目标是“行为对齐 btree”，第一优先级转为 optimistic transaction view 和剩余 root-scoped fallback：versioned 新写入路径已经能 seek，raw key 旧格式已经 fail fast，正常 cursor movement 已经没有 `loadRows()` / `refreshCursorRows()`，`BtreeCopyFile` 已经用 batch/overlay 替代 snapshot/restore，剩下要把剩余 snapshot 隔离改成 generation pin + read/write set validation，并继续把 check 类路径换成 range/batch。
