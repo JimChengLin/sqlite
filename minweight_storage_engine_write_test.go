@@ -266,6 +266,55 @@ func TestMinweightStorageEngineWithoutRowidPrimaryKeyUpdateMaintainsIndexes(t *t
 	}
 }
 
+func TestMinweightStorageEngineConflictActionsRespectRollbackBoundaries(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, db)
+	db.SetMaxOpenConns(1)
+
+	execMinweightSQL(t, db, `
+		CREATE TABLE items(id INTEGER PRIMARY KEY, sku TEXT NOT NULL UNIQUE);
+		CREATE TABLE audit(seq INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT NOT NULL);
+		CREATE TRIGGER items_ai AFTER INSERT ON items BEGIN
+			INSERT INTO audit(event) VALUES ('insert:' || new.id || ':' || new.sku);
+		END;
+	`)
+	execMinweightSQL(t, db, "INSERT INTO items(id, sku) VALUES (1, 'base')")
+	execMinweightSQL(t, db, "BEGIN")
+	execMinweightSQL(t, db, "INSERT INTO items(id, sku) VALUES (2, 'tx-before-conflict')")
+	execMinweightSQL(t, db, "INSERT OR IGNORE INTO items(id, sku) VALUES (3, 'base'), (4, 'ignored-continues')")
+
+	_, err = db.Exec("INSERT OR FAIL INTO items(id, sku) VALUES (5, 'fail-keeps-prior'), (6, 'base'), (7, 'fail-stops')")
+	minweightAssertSQLiteCode(t, err, sqlite3.SQLITE_CONSTRAINT_UNIQUE)
+	if got := minweightQueryStrings(t, db, "SELECT printf('%d:%s', id, sku) FROM items ORDER BY id"); !reflect.DeepEqual(got, []string{"1:base", "2:tx-before-conflict", "4:ignored-continues", "5:fail-keeps-prior"}) {
+		t.Fatalf("rows after OR FAIL = %v", got)
+	}
+
+	_, err = db.Exec("INSERT OR ABORT INTO items(id, sku) VALUES (8, 'abort-rolls-back-statement'), (9, 'base'), (10, 'abort-stops')")
+	minweightAssertSQLiteCode(t, err, sqlite3.SQLITE_CONSTRAINT_UNIQUE)
+	if got := minweightQueryStrings(t, db, "SELECT printf('%d:%s', id, sku) FROM items ORDER BY id"); !reflect.DeepEqual(got, []string{"1:base", "2:tx-before-conflict", "4:ignored-continues", "5:fail-keeps-prior"}) {
+		t.Fatalf("rows after OR ABORT = %v", got)
+	}
+
+	_, err = db.Exec("INSERT OR ROLLBACK INTO items(id, sku) VALUES (11, 'rollback-drops-transaction'), (12, 'base')")
+	minweightAssertSQLiteCode(t, err, sqlite3.SQLITE_CONSTRAINT_UNIQUE)
+	if got := minweightQueryStrings(t, db, "SELECT printf('%d:%s', id, sku) FROM items ORDER BY id"); !reflect.DeepEqual(got, []string{"1:base"}) {
+		t.Fatalf("rows after OR ROLLBACK = %v", got)
+	}
+	if got := minweightQueryStrings(t, db, "SELECT event FROM audit ORDER BY seq"); !reflect.DeepEqual(got, []string{"insert:1:base"}) {
+		t.Fatalf("audit after OR ROLLBACK = %v", got)
+	}
+
+	execMinweightSQL(t, db, "INSERT INTO items(id, sku) VALUES (2, 'after-rollback')")
+	if got := minweightQueryStrings(t, db, "SELECT printf('%d:%s', id, sku) FROM items ORDER BY id"); !reflect.DeepEqual(got, []string{"1:base", "2:after-rollback"}) {
+		t.Fatalf("rows after follow-up insert = %v", got)
+	}
+}
+
 func TestMinweightStorageEngineFailedStatementRollsBackTriggerWrites(t *testing.T) {
 	installMinweightStorageEngineForTest(t)
 
@@ -357,5 +406,19 @@ func TestMinweightStorageEngineDeferredForeignKeyCommitFailureDoesNotPublish(t *
 	execMinweightSQL(t, writer, "INSERT INTO child(id, parent_id) VALUES (1, 99)")
 	if got := minweightQueryInt(t, observer, "SELECT count(*) FROM child WHERE parent_id = 99"); got != 1 {
 		t.Fatalf("observer child rows after valid insert = %d, want 1", got)
+	}
+}
+
+func minweightAssertSQLiteCode(t *testing.T, err error, code int) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("error = nil, want sqlite code %d", code)
+	}
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		t.Fatalf("error = %T %v, want sqlite.Error code %d", err, err, code)
+	}
+	if sqliteErr.Code() != code {
+		t.Fatalf("sqlite code = %d, want %d", sqliteErr.Code(), code)
 	}
 }
