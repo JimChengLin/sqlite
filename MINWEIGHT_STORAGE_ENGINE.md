@@ -105,7 +105,17 @@ Last updated: 2026-06-04.
 
 Default script concurrency is 8. Override with `TEST_PARALLEL=N` only when the machine is overloaded.
 
-Routine minweight check:
+Default per-turn minweight quick gate, target under 30s:
+
+```sh
+./test-minweight-quick.sh
+```
+
+Latest quick run: 6.62s on 2026-06-04 with `TEST_PARALLEL=8`.
+
+The quick gate intentionally covers high-value storage semantics only: path-backed minweight persistence, rollback overlay behavior, `WITHOUT ROWID`/sortable index seek behavior, short reader pinned views, WAL fail-fast behavior, handle-bound dispatch after global engine switching, direct optimistic read-set/range conflict checks, and the no-legacy-raw-index-key path. Keep low-priority shim checks such as `sqlite_dbpage`, cache/mmap visible state, and custom-VFS snapshot import out of this default list.
+
+Focused minweight integration check, run before commits that touch storage semantics when the quick gate is not enough:
 
 ```sh
 ./test-minweight-storage-engine.sh
@@ -119,13 +129,13 @@ The script runs minweight adapter-specific tests and generic top-level SQL behav
 It does not include the low-priority `sqlite_dbpage` and custom-VFS snapshot shims; broad/full minweight runs still cover `sqlite_dbpage`, while `TestVFS` remains skipped until minweight has real VFS I/O semantics.
 It also excludes native SQLite file-open/read-only tests such as `TestIssue97`, `TestIsReadOnly`, and `TestOpenV2FailureErrorMessage` because path-backed minweight filenames are store directories and read-only path opens currently fail fast instead of emulating SQLite page-file readonly behavior.
 
-Broad top-level minweight check without context-expiration stress tests and native physical-file/VFS tests:
+Reduced-frequency broad top-level minweight check without context-expiration stress tests and native physical-file/VFS tests:
 
 ```sh
 ./test-minweight-broad.sh
 ```
 
-Latest broad run: 493.597s on 2026-06-04 with `TEST_PARALLEL=8`. It skips `TestRegisteredFunctions/QueryContext_with_context_expiring`, `TestRegisteredFunctions/ExecContext_with_context_expiring`, `TestIssue97`, `TestOpenV2FailureErrorMessage`, `TestVFS`, and `TestIsReadOnly`. Run this after non-interrupt engine behavior changes when the full context stress coverage and native physical-file/VFS behavior are not the point.
+Latest broad run: 493.597s on 2026-06-04 with `TEST_PARALLEL=8`. It skips `TestRegisteredFunctions/QueryContext_with_context_expiring`, `TestRegisteredFunctions/ExecContext_with_context_expiring`, `TestIssue97`, `TestOpenV2FailureErrorMessage`, `TestVFS`, and `TestIsReadOnly`. Run this after broad engine behavior changes or before larger milestones when the full context stress coverage and native physical-file/VFS behavior are not the point; do not run it after narrow edits.
 
 Full top-level minweight check, run after broad engine semantics changes, context-interrupt changes, or before larger milestones:
 
@@ -133,7 +143,7 @@ Full top-level minweight check, run after broad engine semantics changes, contex
 ./test-minweight-full.sh
 ```
 
-Latest full run: 494.331s on 2026-06-04 with `-p 8 -parallel 8`.
+Latest completed full run before the physical-file skip split: 494.331s on 2026-06-04 with `-p 8 -parallel 8`. A later full attempt on 2026-06-04 was stopped after the quick-gate policy change; do not restart it unless the change specifically needs context-interrupt or milestone coverage.
 
 Native btree storage-engine check:
 
@@ -143,12 +153,16 @@ TEST_PARALLEL=8 ./test-storage-engine.sh
 
 Latest storage-engine script run: passed on 2026-06-04 with `TEST_PARALLEL=8`, including the lib binding cleanup test, competing-writer/busy-timeout/open-reader-cursor/WAL-disabled/versioned-index-probe minweight regressions, native focused behavior tests, and the focused `./lib` test-binary compile matrix for `darwin/arm64` plus `linux/amd64`.
 
+This native/minweight mixed script is not a default per-turn gate; it compiles packages, runs VFS tests, and builds the focused lib matrix. Run it when storage-engine API shape, dispatch binding, native/minweight shared behavior, or compile-target surface changes.
+
 Do not run the full `TestRegisteredFunctions` with a 180s timeout as a routine native regression. It includes the two expiring-context stress subtests below and times out before finishing on this machine. Run the targeted subtests that touch the current change, or give the full test a longer timeout when specifically working on context interruption.
 `test-storage-engine.sh` also runs storage-engine API tests, lib binding cleanup tests, minweight adapter tests, and native/top-level behavior tests as separate `go test` processes. Keep that split for focused signal and faster diagnosis; correctness must still come from handle/db binding cleanup in the storage-engine dispatch layer.
 The default lib compile matrix is intentionally only `darwin/arm64` and `linux/amd64`. Use `STORAGE_ENGINE_MATRIX=full ./test-storage-engine.sh` for the full cross-target matrix, or set `STORAGE_ENGINE_MATRIX='linux/amd64 windows/amd64'` for an explicit target list.
 
 ## Slow Or Reduced-Frequency Tests
 
+- `./test-minweight-storage-engine.sh`: focused integration script. Use it before commits that touch storage semantics or when quick-gate coverage is too narrow, but not after every tiny edit.
+- `./test-minweight-broad.sh`: currently about 8m14s on darwin/arm64 even with context-expiration and native physical-file/VFS skips. Latest broad run: 493.597s on 2026-06-04 with `TEST_PARALLEL=8`. Run after broad engine behavior changes or before larger milestones, not as routine feedback.
 - `TestRegisteredFunctions/QueryContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Verified under minweight on 2026-06-03; keep it out of the focused script and run it only when specifically checking interrupt behavior.
 - `TestRegisteredFunctions/ExecContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Verified under minweight on 2026-06-03; keep it out of the focused script and run it only when specifically checking interrupt behavior.
 - `TestIssue53`: passes under minweight; latest targeted run after index seek changes was 3.145s on 2026-06-04. Keep it out of the focused script; run it in full minweight checks or when index seek/order code changes.
@@ -156,13 +170,15 @@ The default lib compile matrix is intentionally only `darwin/arm64` and `linux/a
 - Native SQLite page-file open/read-only behavior tests (`TestIssue97`, `TestIsReadOnly`, `TestOpenV2FailureErrorMessage`): keep them out of focused and broad minweight scripts. Minweight path-backed databases are directories opened with `minweight.Open`, and `mode=ro` is covered by `TestMinweightStorageEngineReadOnlyPathOpenFailsFast` until real minweight read-only open exists.
 - `TestVFS`: keep it out of focused and broad minweight scripts. Minweight does not implement VFS I/O; the current VFS path is only read-only logical snapshot import coverage, not writable/native VFS support.
 - Native SQLite WAL file lifecycle tests (`TestFcntlPersistWAL`): skip under minweight because minweight does not implement SQLite WAL files. Minweight coverage is `TestMinweightStorageEngineJournalModeWALStaysRollback`, which verifies `PRAGMA journal_mode=WAL` remains `delete` and no `-wal` placeholder is created.
-- Full `./test-minweight-full.sh`: currently about 8m15s on darwin/arm64 because it includes the two expiring-context stress tests. Latest full run: 494.331s on 2026-06-04 with `-p 8 -parallel 8`. Run after broad engine changes or before larger milestones, not after every narrow commit.
+- Full `./test-minweight-full.sh`: currently about 8m15s on darwin/arm64 because it includes the two expiring-context stress tests. Latest completed full run before the physical-file skip split: 494.331s on 2026-06-04 with `-p 8 -parallel 8`; a later attempt on 2026-06-04 was stopped after adopting the quick-gate policy. Run after context-interrupt changes, broad engine changes, or before larger milestones, not after every narrow commit.
 - `STORAGE_ENGINE_MATRIX=full ./test-storage-engine.sh`: full cross-target lib test-binary compilation matrix. Run when storage-engine ABI signatures or generated-code wrappers change broadly, not after every commit. The default script already covers the high-signal `darwin/arm64` and `linux/amd64` targets.
 - Full historical `golangci-lint run ./lib --enable-only=gocyclo,funlen --timeout 5m`: useful when specifically splitting old debt, but not a routine gate yet. Current new-code gate is `--new`; known old debt includes large minweight btree entrypoints such as insert/delete and historical test helpers.
 
 ## Minweight-Specific Skips
 
 - `TestFcntlPersistWAL`: skipped under minweight because it asserts native SQLite WAL file creation/cleanup. Minweight currently keeps `journal_mode=WAL` in rollback `delete` mode and must not create fake `-wal` placeholders.
+- `TestIssue97`, `TestOpenV2FailureErrorMessage`, `TestIsReadOnly`: skipped by broad/full minweight scripts because they assert native SQLite page-file/read-only path behavior. Minweight path-backed databases are minweight store directories and `mode=ro` is fail-fast until minweight_store has a real read-only open mode.
+- `TestVFS`: skipped by broad/full minweight scripts because minweight does not implement SQLite VFS I/O. The existing VFS path is read-only logical snapshot import coverage, not native minweight VFS support.
 
 ## TODO
 

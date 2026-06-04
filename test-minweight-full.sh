@@ -6,4 +6,8 @@ parallel=${TEST_PARALLEL:-8}
 export GOCACHE
 export SQLITE_TEST_STORAGE_ENGINE=minweight
 
-go test -p "$parallel" -parallel "$parallel" -timeout 10m ./
+# Reduced-frequency full top-level sweep. It still includes the slow context-expiration
+# stress tests, so run it only for interrupt work, broad engine changes, or milestones.
+go test -p "$parallel" -parallel "$parallel" -timeout 10m \
+	-skip '^(TestIssue97|TestOpenV2FailureErrorMessage|TestVFS|TestIsReadOnly)$' \
+	./
