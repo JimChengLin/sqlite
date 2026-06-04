@@ -2930,6 +2930,29 @@ func minweightRestoreIndexCursor(cur *minweightCursor, row minweightRow) (int32,
 	return 1, nil
 }
 
+func minweightSeekIndexAtOrAfterOldIndex(cur *minweightCursor, oldIndex int) (minweightRow, bool, error) {
+	if oldIndex < len(cur.rows) && minweightIndexKeyVersionedForRoot(cur.root, cur.rows[oldIndex].storeKey) {
+		return cur.btree.seekIndexGE(cur.root, cur.rows[oldIndex].storeKey, false)
+	}
+	if oldIndex > 0 && oldIndex-1 < len(cur.rows) && minweightIndexKeyVersionedForRoot(cur.root, cur.rows[oldIndex-1].storeKey) {
+		return cur.btree.seekIndexGE(cur.root, cur.rows[oldIndex-1].storeKey, true)
+	}
+	if len(cur.rows) == 0 && oldIndex == 0 {
+		return cur.btree.seekIndexGE(cur.root, minweightVersionedIndexLower(cur.root), false)
+	}
+	return minweightRow{}, false, nil
+}
+
+func minweightSeekIndexBeforeOldIndex(cur *minweightCursor, oldIndex int) (minweightRow, bool, error) {
+	if oldIndex < len(cur.rows) && minweightIndexKeyVersionedForRoot(cur.root, cur.rows[oldIndex].storeKey) {
+		return cur.btree.seekIndexLE(cur.root, cur.rows[oldIndex].storeKey, true)
+	}
+	if oldIndex > 0 && oldIndex-1 < len(cur.rows) && minweightIndexKeyVersionedForRoot(cur.root, cur.rows[oldIndex-1].storeKey) {
+		return cur.btree.seekIndexLE(cur.root, cur.rows[oldIndex-1].storeKey, false)
+	}
+	return minweightRow{}, false, nil
+}
+
 func (e *minweightStorageEngine) BtreeCursorRestore(ctx BtreeContext, pCur BtreeCursorHandle, pDifferentRow BtreeMemoryHandle) (r int32) {
 	if pCur.IsNil() {
 		minweightWriteResult(pDifferentRow, 0)
@@ -3861,6 +3884,14 @@ func (e *minweightStorageEngine) BtreeEof(ctx BtreeContext, pCur BtreeCursorHand
 		}
 	}
 	if oldIndex >= 0 {
+		row, ok, err := minweightSeekIndexAtOrAfterOldIndex(cur, oldIndex)
+		if err != nil {
+			return 1
+		}
+		if ok {
+			cur.setCurrent(row)
+			return 0
+		}
 		if cur.dataVer != cur.btree.visibleDataVer() {
 			if rc := e.refreshCursorRows(ctx, pCur, cur); rc != SQLITE_OK {
 				return 1
@@ -3955,6 +3986,14 @@ func (e *minweightStorageEngine) BtreeNext(ctx BtreeContext, pCur BtreeCursorHan
 		}
 		oldIndex := cur.index
 		if oldIndex >= 0 {
+			row, ok, err := minweightSeekIndexAtOrAfterOldIndex(cur, oldIndex)
+			if err != nil {
+				return minweightSQLiteError(err)
+			}
+			if ok {
+				cur.setCurrent(row)
+				return SQLITE_OK
+			}
 			if cur.dataVer != cur.btree.visibleDataVer() {
 				if rc := e.refreshCursorRows(ctx, pCur, cur); rc != SQLITE_OK {
 					return rc
@@ -4085,6 +4124,14 @@ func (e *minweightStorageEngine) BtreePrevious(ctx BtreeContext, pCur BtreeCurso
 		oldIndex := cur.index
 		if oldIndex < 0 {
 			return SQLITE_DONE
+		}
+		row, ok, err := minweightSeekIndexBeforeOldIndex(cur, oldIndex)
+		if err != nil {
+			return minweightSQLiteError(err)
+		}
+		if ok {
+			cur.setCurrent(row)
+			return SQLITE_OK
 		}
 		if cur.dataVer != cur.btree.visibleDataVer() {
 			if rc := e.refreshCursorRows(ctx, pCur, cur); rc != SQLITE_OK {

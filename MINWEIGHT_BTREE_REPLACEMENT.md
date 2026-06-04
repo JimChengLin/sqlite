@@ -161,7 +161,7 @@ value = SQLite index record bytes
 - `BtreeIndexMoveto` 的最终 compare result 仍来自 SQLite record comparator，避免 adapter 自己重新定义 SQLite record 比较语义。
 - `BtreePayload` / `BtreePayloadFetch` 把当前 row 的 payload 写回 SQLite 期待的内存位置。
 
-cursor 会记录 `dataVer`。写入后 database 的 `dataVer++`，stale table/index cursor restore 已经优先用 point lookup 和 seek 定位回原 row 或相邻 row；versioned index cursor 即使曾经 materialize 成 slice，stale `BtreeNext` / `BtreePrevious` / `BtreeEof` 也会优先按 store key seek。仍会调用 `refreshCursorRows()` 的是缺少 versioned store key 或只有旧 slice index 的最后 fallback。
+cursor 会记录 `dataVer`。写入后 database 的 `dataVer++`，stale table/index cursor restore 已经优先用 point lookup 和 seek 定位回原 row 或相邻 row；versioned index cursor 即使曾经 materialize 成 slice，stale `BtreeNext` / `BtreePrevious` / `BtreeEof` 也会优先按 store key 或旧 slice 里的 versioned 锚点 seek。仍会调用 `refreshCursorRows()` 的是没有可用 versioned store-key 锚点的最后 fallback。
 
 这也是临时实现。adapter 不应该把当前 root 甚至整库扫出来 materialize 成 `[]minweightRow`，再用 slice index 假装 cursor。
 
