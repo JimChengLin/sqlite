@@ -1,10 +1,10 @@
 # Minweight OLTP Benchmark
 
-Generated: 2026-06-04T19:39:23+08:00
+Generated: 2026-06-04T19:41:29+08:00
 
 Environment: `darwin/arm64`, Go `go1.25.1`, GOMAXPROCS `10`.
 
-Command shape: `go run ./tools/minweight_oltp_bench -rows 5000 -ops 20000 -runs 3`.
+Command shape: `go run ./tools/minweight_oltp_bench -rows 50000 -ops 50000 -runs 3`.
 
 Both engines ran through `database/sql` with the same SQL and a single open connection. Path-backed temp databases were used. Pragmas: `foreign_keys=ON`, `journal_mode=DELETE`, `synchronous=OFF`, `temp_store=MEMORY`, `cache_size=-20000`. Native uses SQLite btree pages; minweight uses `sqlite.NewMinweightStorageEngine()` and path-backed minweight stores.
 
@@ -12,29 +12,29 @@ Both engines ran through `database/sql` with the same SQL and a single open conn
 
 | Scenario | Ops | Native ops/s | Minweight ops/s | Minweight / Native | Native median | Minweight median |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `bulk_insert_tx` | 20000 | 237750 | 170553 | 0.72x | 84.122ms | 117.265292ms |
-| `mixed_small_tx` | 20000 | 11548 | 111676 | 9.67x | 1.73196625s | 179.089625ms |
-| `point_select_pk` | 20000 | 102798 | 266986 | 2.60x | 194.557041ms | 74.910167ms |
-| `point_select_secondary` | 20000 | 91894 | 162842 | 1.77x | 217.642167ms | 122.818584ms |
-| `update_by_pk_tx` | 20000 | 199556 | 199839 | 1.00x | 100.222416ms | 100.080334ms |
-| `upsert_by_pk_tx` | 20000 | 175514 | 170337 | 0.97x | 113.950916ms | 117.414042ms |
+| `bulk_insert_tx` | 50000 | 263402 | 165312 | 0.63x | 189.824ms | 302.459083ms |
+| `mixed_small_tx` | 50000 | 16615 | 76563 | 4.61x | 3.009384833s | 653.059834ms |
+| `point_select_pk` | 50000 | 83906 | 124994 | 1.49x | 595.905209ms | 400.018917ms |
+| `point_select_secondary` | 50000 | 73876 | 99356 | 1.34x | 676.806083ms | 503.243208ms |
+| `update_by_pk_tx` | 50000 | 137627 | 96644 | 0.70x | 363.301042ms | 517.363041ms |
+| `upsert_by_pk_tx` | 50000 | 126178 | 88616 | 0.70x | 396.265916ms | 564.232083ms |
 
 ## Raw Runs
 
 | Engine | Scenario | Run durations |
 | --- | --- | --- |
-| `minweight_store` | `bulk_insert_tx` | 115.619167ms, 117.265292ms, 146.23475ms |
-| `native_btree` | `bulk_insert_tx` | 79.397292ms, 84.122ms, 96.809875ms |
-| `minweight_store` | `mixed_small_tx` | 178.491959ms, 179.089625ms, 182.030209ms |
-| `native_btree` | `mixed_small_tx` | 1.487913125s, 1.73196625s, 2.900006666s |
-| `minweight_store` | `point_select_pk` | 74.145333ms, 74.910167ms, 85.229542ms |
-| `native_btree` | `point_select_pk` | 183.077917ms, 194.557041ms, 206.590208ms |
-| `minweight_store` | `point_select_secondary` | 106.87675ms, 122.818584ms, 122.926ms |
-| `native_btree` | `point_select_secondary` | 214.554042ms, 217.642167ms, 224.389791ms |
-| `minweight_store` | `update_by_pk_tx` | 97.391167ms, 100.080334ms, 114.156459ms |
-| `native_btree` | `update_by_pk_tx` | 94.492084ms, 100.222416ms, 107.60975ms |
-| `minweight_store` | `upsert_by_pk_tx` | 115.2795ms, 117.414042ms, 124.944042ms |
-| `native_btree` | `upsert_by_pk_tx` | 83.781459ms, 113.950916ms, 116.158667ms |
+| `minweight_store` | `bulk_insert_tx` | 294.569583ms, 302.459083ms, 308.756666ms |
+| `native_btree` | `bulk_insert_tx` | 178.675584ms, 189.824ms, 191.943083ms |
+| `minweight_store` | `mixed_small_tx` | 624.3015ms, 653.059834ms, 667.591833ms |
+| `native_btree` | `mixed_small_tx` | 2.991363542s, 3.009384833s, 3.487531083s |
+| `minweight_store` | `point_select_pk` | 392.279042ms, 400.018917ms, 408.97225ms |
+| `native_btree` | `point_select_pk` | 589.405292ms, 595.905209ms, 636.817167ms |
+| `minweight_store` | `point_select_secondary` | 500.249542ms, 503.243208ms, 530.598375ms |
+| `native_btree` | `point_select_secondary` | 649.065083ms, 676.806083ms, 707.128708ms |
+| `minweight_store` | `update_by_pk_tx` | 509.764166ms, 517.363041ms, 546.454833ms |
+| `native_btree` | `update_by_pk_tx` | 357.38175ms, 363.301042ms, 387.297625ms |
+| `minweight_store` | `upsert_by_pk_tx` | 549.6185ms, 564.232083ms, 569.890042ms |
+| `native_btree` | `upsert_by_pk_tx` | 380.748458ms, 396.265916ms, 401.32125ms |
 
 ## Notes
 
