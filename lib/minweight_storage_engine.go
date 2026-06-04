@@ -1689,72 +1689,6 @@ func (bt *minweightBtree) snapshot() (*minweightSnapshot, error) {
 	return s, nil
 }
 
-func minweightStateFromSnapshot(s minweightSnapshot, dataVer uint32) minweightDBState {
-	return minweightDBState{
-		meta:          s.meta,
-		tables:        minweightCloneTables(s.tables),
-		next:          s.next,
-		dataVer:       dataVer,
-		pageSize:      s.pageSize,
-		reserve:       s.reserve,
-		reserveWanted: s.reserveWanted,
-		pageSizeFixed: s.pageSizeFixed,
-		maxPageCount:  s.maxPageCount,
-		secureDelete:  s.secureDelete,
-		autoVacuum:    s.autoVacuum,
-		cacheSize:     s.cacheSize,
-		spillSize:     s.spillSize,
-		freeRoots:     minweightCloneRootList(s.freeRoots),
-	}
-}
-
-func (bt *minweightBtree) restoreSnapshot(s minweightSnapshot) error {
-	bt.mu.Lock()
-	if tx := bt.activeTxnLocked(); tx != nil {
-		dataVer := bt.visibleStateLocked().dataVer + 1
-		tx.state = minweightStateFromSnapshot(s, dataVer)
-		tx.writes = map[string]minweightTxnWrite{}
-		bt.mu.Unlock()
-		if err := bt.store.Scan(func(item minweight.Item) bool {
-			bt.mu.Lock()
-			if tx := bt.activeTxnLocked(); tx != nil {
-				tx.writes[string(item.Key)] = minweightTxnWrite{
-					key:     append([]byte(nil), item.Key...),
-					deleted: true,
-				}
-			}
-			bt.mu.Unlock()
-			return true
-		}); err != nil {
-			return err
-		}
-		bt.mu.Lock()
-		if tx := bt.activeTxnLocked(); tx != nil {
-			for _, item := range s.items {
-				tx.writes[string(item.key)] = minweightTxnWrite{
-					key:   append([]byte(nil), item.key...),
-					value: append([]byte(nil), item.value...),
-				}
-			}
-		}
-		bt.mu.Unlock()
-		return nil
-	}
-	bt.mu.Unlock()
-	if err := bt.replaceAllItems(s.items); err != nil {
-		return err
-	}
-	bt.mu.Lock()
-	state := minweightStateFromSnapshot(s, bt.dataVer+1)
-	bt.applyStateLocked(state)
-	if err := bt.persistMetadataLocked(); err != nil {
-		bt.mu.Unlock()
-		return err
-	}
-	bt.mu.Unlock()
-	return nil
-}
-
 func (bt *minweightBtree) visibleDataVer() uint32 {
 	return bt.visibleState().dataVer
 }
@@ -2184,38 +2118,6 @@ func (bt *minweightBtree) seekTableLE(root uint32, target int64) (minweightRow, 
 		row, rowOK := minweightBetterTableLERow(baseRow, true, overlayRow, overlayOK)
 		return row, rowOK, nil
 	}
-}
-
-func (bt *minweightBtree) replaceAllItems(items []minweightSnapshotItem) error {
-	if bt.path == "" {
-		store := minweight.New()
-		for _, item := range items {
-			if err := store.Put(item.key, item.value); err != nil {
-				return err
-			}
-		}
-		bt.store = store
-		return nil
-	}
-	var batch minweight.WriteBatch
-	var batchErr error
-	if err := bt.store.Scan(func(item minweight.Item) bool {
-		if batchErr = batch.Delete(item.Key); batchErr != nil {
-			return false
-		}
-		return true
-	}); err != nil {
-		return err
-	}
-	if batchErr != nil {
-		return batchErr
-	}
-	for _, item := range items {
-		if err := batch.Put(item.key, item.value); err != nil {
-			return err
-		}
-	}
-	return bt.store.WriteBatch(batch)
 }
 
 func (bt *minweightBtree) clearAllItems() error {
@@ -4625,11 +4527,7 @@ func (e *minweightStorageEngine) BtreeCopyFile(ctx BtreeContext, pTo BtreeHandle
 		return rc
 	}
 	from := e.btree(pFrom)
-	s, err := from.snapshot()
-	if err != nil {
-		return minweightSQLiteError(err)
-	}
-	if err := to.restoreSnapshot(*s); err != nil {
+	if err := to.copyContentsFrom(from); err != nil {
 		return minweightSQLiteError(err)
 	}
 	return SQLITE_OK
