@@ -460,8 +460,26 @@ func logicalBackupCopyTable(src *conn, dst *conn, table string) (err error) {
 	if len(columns) == 0 {
 		return fmt.Errorf("sqlite: backup table %s has no insertable columns", table)
 	}
-	columnList := quoteIdentList(columns)
-	r, err := src.query(context.Background(), "SELECT "+columnList+" FROM "+quoteIdent(table), nil)
+	selectColumns := quoteIdentList(columns)
+	insertColumns := columns
+	withoutRowid, err := logicalTableWithoutRowid(src, table)
+	if err != nil {
+		return err
+	}
+	if !withoutRowid {
+		allColumns, _, err := logicalTableColumnNames(src, table)
+		if err != nil {
+			return err
+		}
+		rowidColumn := logicalHiddenRowidColumn(allColumns)
+		if rowidColumn == "" {
+			return fmt.Errorf("sqlite: backup table %s shadows all rowid aliases", table)
+		}
+		selectColumns = rowidColumn + " AS __minweight_rowid__, " + selectColumns
+		insertColumns = append([]string{rowidColumn}, columns...)
+	}
+	insertColumnList := quoteIdentList(insertColumns)
+	r, err := src.query(context.Background(), "SELECT "+selectColumns+" FROM "+quoteIdent(table), nil)
 	if err != nil {
 		return err
 	}
@@ -470,8 +488,8 @@ func logicalBackupCopyTable(src *conn, dst *conn, table string) (err error) {
 			err = closeErr
 		}
 	}()
-	insert := "INSERT INTO " + quoteIdent(table) + " (" + columnList + ") VALUES (" + strings.TrimRight(strings.Repeat("?,", len(columns)), ",") + ")"
-	values := make([]driver.Value, len(columns))
+	insert := "INSERT INTO " + quoteIdent(table) + " (" + insertColumnList + ") VALUES (" + strings.TrimRight(strings.Repeat("?,", len(insertColumns)), ",") + ")"
+	values := make([]driver.Value, len(insertColumns))
 	for {
 		if err := r.Next(values); err != nil {
 			if err == io.EOF {

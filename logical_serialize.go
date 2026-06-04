@@ -284,6 +284,10 @@ func logicalSQLiteSequenceHasRows(c *conn) (bool, error) {
 }
 
 func logicalUserTableNames(c *conn) ([]string, error) {
+	shadowTables, err := logicalShadowTableNames(c)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := logicalBackupQuery(c, "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY rowid")
 	if err != nil {
 		return nil, err
@@ -294,12 +298,45 @@ func logicalUserTableNames(c *conn) ([]string, error) {
 		if !ok {
 			return nil, fmt.Errorf("sqlite: logical table name is %T", row[0])
 		}
+		if shadowTables[name] {
+			continue
+		}
 		tables = append(tables, name)
 	}
 	return tables, nil
 }
 
+func logicalShadowTableNames(c *conn) (map[string]bool, error) {
+	rows, err := logicalBackupQuery(c, "PRAGMA table_list")
+	if err != nil {
+		return nil, err
+	}
+	shadowTables := map[string]bool{}
+	for _, row := range rows {
+		schema, ok := row[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("sqlite: table_list schema is %T", row[0])
+		}
+		name, ok := row[1].(string)
+		if !ok {
+			return nil, fmt.Errorf("sqlite: table_list name is %T", row[1])
+		}
+		tableType, ok := row[2].(string)
+		if !ok {
+			return nil, fmt.Errorf("sqlite: table_list type for %s is %T", name, row[2])
+		}
+		if schema == "main" && tableType == "shadow" {
+			shadowTables[name] = true
+		}
+	}
+	return shadowTables, nil
+}
+
 func logicalSchemaObjects(c *conn) ([]logicalSerializedSchema, error) {
+	shadowTables, err := logicalShadowTableNames(c)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := logicalBackupQuery(c, `
 		SELECT type, name, tbl_name, rootpage, sql
 		FROM sqlite_schema
@@ -328,6 +365,9 @@ func logicalSchemaObjects(c *conn) ([]logicalSerializedSchema, error) {
 		name, ok := row[1].(string)
 		if !ok {
 			return nil, fmt.Errorf("sqlite: serialize schema name is %T", row[1])
+		}
+		if shadowTables[name] {
+			continue
 		}
 		tblName, ok := row[2].(string)
 		if !ok {
