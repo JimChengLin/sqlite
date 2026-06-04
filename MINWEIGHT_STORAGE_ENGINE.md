@@ -104,6 +104,7 @@ Last updated: 2026-06-04.
 - Preserved generated-column tables through minweight logical `Serialize`/`Deserialize` and logical `Backup`. Logical row copy now uses `PRAGMA table_xinfo` to insert only writable columns while replayed schema SQL keeps STORED and VIRTUAL generated expressions intact.
 - Preserved logical rowids in minweight logical `Backup` for ordinary rowid tables and FTS5 virtual tables by copying an available hidden rowid alias alongside writable columns.
 - Preserved FTS5 virtual tables through minweight logical `Serialize`/`Deserialize` and logical `Backup` by skipping FTS5 shadow tables during schema/data replay and copying only the virtual table's logical rows.
+- Added high-value SQL write coverage for minweight quick/focused gates: UPSERT with `RETURNING`, `INSERT OR REPLACE` index maintenance, foreign-key cascade writes with triggers, and partial/expression unique-index statement rollback.
 
 ## Focused Test Policy
 
@@ -115,9 +116,9 @@ Default per-turn minweight quick gate, target under 30s:
 ./test-minweight.sh quick
 ```
 
-Latest quick run: 6.82s on 2026-06-04 with `TEST_PARALLEL=8`.
+Latest quick run: 7.30s on 2026-06-04 with `TEST_PARALLEL=8`.
 
-The quick gate intentionally covers high-value storage semantics only: path-backed minweight persistence, rollback overlay behavior, `WITHOUT ROWID`/sortable index seek behavior, short reader pinned views, WAL fail-fast behavior, logical AUTOINCREMENT sequence preservation, logical generated-column preservation, logical rowid/FTS5 virtual table preservation, handle-bound dispatch after global engine switching, direct optimistic read-set/range conflict checks, and the no-legacy-raw-index-key path. Keep low-priority shim checks such as `sqlite_dbpage`, cache/mmap visible state, and custom-VFS snapshot import out of this default list.
+The quick gate intentionally covers high-value storage semantics only: path-backed minweight persistence, rollback overlay behavior, `WITHOUT ROWID`/sortable index seek behavior, short reader pinned views, WAL fail-fast behavior, logical AUTOINCREMENT sequence preservation, logical generated-column preservation, logical rowid/FTS5 virtual table preservation, SQL write semantics for UPSERT/REPLACE/foreign-key cascade/triggers/partial expression indexes, handle-bound dispatch after global engine switching, direct optimistic read-set/range conflict checks, and the no-legacy-raw-index-key path. Keep low-priority shim checks such as `sqlite_dbpage`, cache/mmap visible state, and custom-VFS snapshot import out of this default list.
 
 The old `./test-minweight-quick.sh`, `./test-minweight-broad.sh`, and `./test-minweight-full.sh` entry points are thin wrappers around `./test-minweight.sh quick|broad|full`.
 
@@ -172,6 +173,7 @@ The default lib compile matrix is intentionally only `darwin/arm64` and `linux/a
 - `TestRegisteredFunctions/QueryContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Verified under minweight on 2026-06-03; keep it out of the focused script and run it only when specifically checking interrupt behavior.
 - `TestRegisteredFunctions/ExecContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Verified under minweight on 2026-06-03; keep it out of the focused script and run it only when specifically checking interrupt behavior.
 - `TestIssue53`: passes under minweight; latest targeted run after index seek changes was 3.145s on 2026-06-04. Keep it out of the focused script; run it in full minweight checks or when index seek/order code changes.
+- `TestIssue51`: intentionally loops for about 1 minute and repeatedly opens/closes path-backed connections around `INSERT OR REPLACE`. Use a smaller targeted write probe for routine work; run `TestIssue51` only in broad/milestone checks for repeated-open churn.
 - `sqlite_dbpage` and custom-VFS snapshot compatibility: useful to reduce user surprise, but low priority because minweight does not implement physical page images or VFS. Keep these out of the focused script; run them in broad/full checks or when editing those shims.
 - Native SQLite page-file open/read-only behavior tests (`TestIssue97`, `TestIsReadOnly`, `TestOpenV2FailureErrorMessage`): keep them out of focused and broad minweight scripts. Minweight path-backed databases are directories opened with `minweight.Open`, and `mode=ro` is covered by `TestMinweightStorageEngineReadOnlyPathOpenFailsFast` until real minweight read-only open exists.
 - `TestVFS`: keep it out of focused and broad minweight scripts. Minweight does not implement VFS I/O; the current VFS path is only read-only logical snapshot import coverage, not writable/native VFS support.

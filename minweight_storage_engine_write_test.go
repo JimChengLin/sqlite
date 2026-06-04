@@ -1,0 +1,179 @@
+// Copyright 2026 The Sqlite Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+//go:build (darwin && (amd64 || arm64)) || (linux && (amd64 || arm64 || loong64 || ppc64le || riscv64 || s390x))
+
+package sqlite_test
+
+import (
+	"database/sql"
+	"reflect"
+	"testing"
+)
+
+func TestMinweightStorageEngineUpsertReplaceMaintainsIndexes(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, db)
+
+	execMinweightSQL(t, db, `
+		CREATE TABLE users(
+			id INTEGER PRIMARY KEY,
+			email TEXT NOT NULL UNIQUE,
+			name TEXT NOT NULL,
+			updates INTEGER NOT NULL DEFAULT 0
+		)
+	`)
+	execMinweightSQL(t, db, "CREATE INDEX users_name ON users(name)")
+	execMinweightSQL(t, db, "INSERT INTO users(id, email, name) VALUES (1, 'a@example.test', 'alice'), (2, 'b@example.test', 'bob')")
+
+	rows, err := db.Query(`
+		INSERT INTO users(email, name) VALUES ('a@example.test', 'alicia')
+		ON CONFLICT(email) DO UPDATE SET name = excluded.name, updates = users.updates + 1
+		RETURNING id, name, updates
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rows.Next() {
+		closeMinweightRows(t, rows)
+		t.Fatal("upsert returning produced no row")
+	}
+	var id int
+	var name string
+	var updates int
+	if err := rows.Scan(&id, &name, &updates); err != nil {
+		closeMinweightRows(t, rows)
+		t.Fatal(err)
+	}
+	if id != 1 || name != "alicia" || updates != 1 {
+		closeMinweightRows(t, rows)
+		t.Fatalf("upsert returning = (%d, %q, %d), want (1, alicia, 1)", id, name, updates)
+	}
+	if rows.Next() {
+		closeMinweightRows(t, rows)
+		t.Fatal("upsert returning produced extra row")
+	}
+	if err := rows.Err(); err != nil {
+		closeMinweightRows(t, rows)
+		t.Fatal(err)
+	}
+	closeMinweightRows(t, rows)
+
+	if got := minweightQueryInt(t, db, "SELECT count(*) FROM users INDEXED BY users_name WHERE name = 'alice'"); got != 0 {
+		t.Fatalf("old indexed name count = %d, want 0", got)
+	}
+	if got := minweightQueryInt(t, db, "SELECT id FROM users INDEXED BY users_name WHERE name = 'alicia'"); got != 1 {
+		t.Fatalf("new indexed name id = %d, want 1", got)
+	}
+
+	execMinweightSQL(t, db, "INSERT OR REPLACE INTO users(id, email, name, updates) VALUES (2, 'c@example.test', 'carol', 7)")
+	want := []string{"1:a@example.test:alicia:1", "2:c@example.test:carol:7"}
+	if got := minweightQueryStrings(t, db, "SELECT printf('%d:%s:%s:%d', id, email, name, updates) FROM users ORDER BY id"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("rows after replace = %v, want %v", got, want)
+	}
+	if got := minweightQueryInt(t, db, "SELECT count(*) FROM users WHERE email = 'b@example.test'"); got != 0 {
+		t.Fatalf("old replaced email count = %d, want 0", got)
+	}
+	if got := minweightQueryInt(t, db, "SELECT id FROM users WHERE email = 'c@example.test'"); got != 2 {
+		t.Fatalf("new replaced email id = %d, want 2", got)
+	}
+}
+
+func TestMinweightStorageEngineForeignKeyCascadeAndTriggers(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, db)
+
+	execMinweightSQL(t, db, "PRAGMA foreign_keys = ON")
+	execMinweightSQL(t, db, `
+		CREATE TABLE parent(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+		CREATE TABLE child(
+			id INTEGER PRIMARY KEY,
+			parent_id INTEGER NOT NULL REFERENCES parent(id) ON UPDATE CASCADE ON DELETE CASCADE,
+			value TEXT NOT NULL
+		);
+		CREATE TABLE audit(seq INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT NOT NULL);
+		CREATE TRIGGER parent_ai AFTER INSERT ON parent BEGIN
+			INSERT INTO audit(event) VALUES ('parent-insert:' || new.id);
+		END;
+		CREATE TRIGGER child_au AFTER UPDATE ON child BEGIN
+			INSERT INTO audit(event) VALUES ('child-update:' || old.parent_id || '->' || new.parent_id);
+		END;
+		CREATE TRIGGER child_ad AFTER DELETE ON child BEGIN
+			INSERT INTO audit(event) VALUES ('child-delete:' || old.id);
+		END;
+	`)
+	execMinweightSQL(t, db, "INSERT INTO parent(id, name) VALUES (10, 'ten')")
+	execMinweightSQL(t, db, "INSERT INTO child(id, parent_id, value) VALUES (1, 10, 'a'), (2, 10, 'b')")
+	execMinweightSQL(t, db, "UPDATE parent SET id = 20 WHERE id = 10")
+
+	if got := minweightQueryStrings(t, db, "SELECT printf('%d:%d:%s', id, parent_id, value) FROM child ORDER BY id"); !reflect.DeepEqual(got, []string{"1:20:a", "2:20:b"}) {
+		t.Fatalf("children after cascade update = %v", got)
+	}
+
+	execMinweightSQL(t, db, "DELETE FROM parent WHERE id = 20")
+	if got := minweightQueryInt(t, db, "SELECT count(*) FROM child"); got != 0 {
+		t.Fatalf("children after cascade delete = %d, want 0", got)
+	}
+	wantAudit := []string{
+		"parent-insert:10",
+		"child-update:10->20",
+		"child-update:10->20",
+		"child-delete:1",
+		"child-delete:2",
+	}
+	if got := minweightQueryStrings(t, db, "SELECT event FROM audit ORDER BY seq"); !reflect.DeepEqual(got, wantAudit) {
+		t.Fatalf("audit rows = %v, want %v", got, wantAudit)
+	}
+}
+
+func TestMinweightStorageEnginePartialExpressionIndexWrites(t *testing.T) {
+	installMinweightStorageEngineForTest(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMinweightDB(t, db)
+
+	execMinweightSQL(t, db, `
+		CREATE TABLE tasks(
+			id INTEGER PRIMARY KEY,
+			status TEXT NOT NULL,
+			owner TEXT NOT NULL,
+			payload TEXT NOT NULL
+		)
+	`)
+	execMinweightSQL(t, db, "CREATE UNIQUE INDEX tasks_open_owner ON tasks(lower(owner)) WHERE status = 'open'")
+	execMinweightSQL(t, db, "INSERT INTO tasks(id, status, owner, payload) VALUES (1, 'open', 'Alice', 'first'), (2, 'closed', 'alice', 'archived')")
+
+	if _, err := db.Exec("INSERT INTO tasks(id, status, owner, payload) VALUES (3, 'open', 'ALICE', 'duplicate')"); err == nil {
+		t.Fatal("duplicate expression-index insert succeeded")
+	}
+	if got := minweightQueryInt(t, db, "SELECT count(*) FROM tasks WHERE id = 3"); got != 0 {
+		t.Fatalf("duplicate insert row count = %d, want 0", got)
+	}
+
+	if _, err := db.Exec("UPDATE tasks SET status = 'open' WHERE id = 2"); err == nil {
+		t.Fatal("duplicate expression-index update succeeded")
+	}
+	if got := minweightQueryStrings(t, db, "SELECT printf('%d:%s:%s', id, status, owner) FROM tasks ORDER BY id"); !reflect.DeepEqual(got, []string{"1:open:Alice", "2:closed:alice"}) {
+		t.Fatalf("rows after failed update = %v", got)
+	}
+
+	execMinweightSQL(t, db, "UPDATE tasks SET status = 'closed' WHERE id = 1")
+	execMinweightSQL(t, db, "UPDATE tasks SET status = 'open' WHERE id = 2")
+	if got := minweightQueryInt(t, db, "SELECT id FROM tasks INDEXED BY tasks_open_owner WHERE status = 'open' AND lower(owner) = 'alice'"); got != 2 {
+		t.Fatalf("expression-index lookup id = %d, want 2", got)
+	}
+}
