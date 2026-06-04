@@ -3836,6 +3836,17 @@ func (e *minweightStorageEngine) BtreeEof(ctx BtreeContext, pCur BtreeCursorHand
 	}
 	oldIndex := cur.index
 	if cur.hasLastRow {
+		if minweightIndexKeyVersionedForRoot(cur.root, cur.lastRow.storeKey) {
+			row, ok, err := cur.btree.seekIndexGE(cur.root, cur.lastRow.storeKey, true)
+			if err != nil {
+				return 1
+			}
+			if ok {
+				cur.setCurrent(row)
+				return 0
+			}
+			return 1
+		}
 		if cur.dataVer != cur.btree.visibleDataVer() {
 			if rc := e.refreshCursorRows(ctx, pCur, cur); rc != SQLITE_OK {
 				return 1
@@ -3916,7 +3927,7 @@ func (e *minweightStorageEngine) BtreeNext(ctx BtreeContext, pCur BtreeCursorHan
 		return SQLITE_OK
 	}
 	if !cur.valid {
-		if len(cur.rows) <= 1 && cur.hasLastRow && minweightIndexKeyVersionedForRoot(cur.root, cur.lastRow.storeKey) {
+		if cur.hasLastRow && minweightIndexKeyVersionedForRoot(cur.root, cur.lastRow.storeKey) {
 			row, ok, err := cur.btree.seekIndexGE(cur.root, cur.lastRow.storeKey, true)
 			if err != nil {
 				return minweightSQLiteError(err)
@@ -3959,7 +3970,7 @@ func (e *minweightStorageEngine) BtreeNext(ctx BtreeContext, pCur BtreeCursorHan
 		return SQLITE_DONE
 	}
 	row, ok := cur.current()
-	if len(cur.rows) <= 1 && ok && minweightIndexKeyVersionedForRoot(cur.root, row.storeKey) {
+	if ok && minweightIndexKeyVersionedForRoot(cur.root, row.storeKey) {
 		next, nextOK, err := cur.btree.seekIndexGE(cur.root, row.storeKey, true)
 		if err != nil {
 			return minweightSQLiteError(err)
@@ -4045,7 +4056,7 @@ func (e *minweightStorageEngine) BtreePrevious(ctx BtreeContext, pCur BtreeCurso
 		return SQLITE_OK
 	}
 	if !cur.valid {
-		if len(cur.rows) <= 1 && cur.hasLastRow && minweightIndexKeyVersionedForRoot(cur.root, cur.lastRow.storeKey) {
+		if cur.hasLastRow && minweightIndexKeyVersionedForRoot(cur.root, cur.lastRow.storeKey) {
 			row, ok, err := cur.btree.seekIndexLE(cur.root, cur.lastRow.storeKey, true)
 			if err != nil {
 				return minweightSQLiteError(err)
@@ -4087,7 +4098,7 @@ func (e *minweightStorageEngine) BtreePrevious(ctx BtreeContext, pCur BtreeCurso
 		cur.index = oldIndex
 	}
 	row, ok := cur.current()
-	if len(cur.rows) <= 1 && ok && minweightIndexKeyVersionedForRoot(cur.root, row.storeKey) {
+	if ok && minweightIndexKeyVersionedForRoot(cur.root, row.storeKey) {
 		prev, prevOK, err := cur.btree.seekIndexLE(cur.root, row.storeKey, true)
 		if err != nil {
 			return minweightSQLiteError(err)
