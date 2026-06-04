@@ -1,117 +1,159 @@
-# Minweight 替换 SQLite Btree 介绍
+# 用 Minweight Store 替换 SQLite Btree
 
-本文说明当前代码如何用 `github.com/JimChengLin/minweight_store` 替换 SQLite 原生 btree。重点是架构边界、KV 映射、事务处理方式，以及目前还没有完全对齐的部分。
+最后更新：2026-06-04。
 
-## 目标和边界
+这份文档说明当前分支如何用 `github.com/JimChengLin/minweight_store` 替换 SQLite 原生 btree。关键边界是：这是 SQLite btree API 层替换，不是 SQLite page file 替换。SQLite parser、planner、VDBE、schema、collation、function、hook 和 `database/sql` driver 仍然走现有 modernc SQLite 代码；替换发生在 `_sqlite3Btree*` 调用面下面。
 
-这个改造不是 virtual table 路线，而是直接替换 SQLite 内部 btree 调用面：
+## 当前范围
 
-- SQL parser、planner、VDBE、schema 管理、函数、collation、driver 层仍然使用原来的 SQLite/modernc 代码。
-- 原来由 SQLite btree/pager 管理的数据页，改为通过 Go `StorageEngine` interface dispatch。
-- 默认实现仍然是翻译自 SQLite C 的原生 btree；minweight 实现同一个 interface。
-- minweight 当前是逻辑 Btree/KV 引擎，不实现 SQLite 物理 page file、pager cache、真实 WAL frame、mmap 或完整 `sqlite_dbpage` 页面内容。
-- 当前 path-backed database 已改为真实落盘的 minweight store；下一层是完成 SQLite btree 语义需要的 transaction view / overlay。WAL 以后只做逻辑事务模式，不做 SQLite WAL frame、shared-memory 或 pager I/O。
-- 在 transaction view 落地前，不新增会让用户误解为真实 WAL、VFS 或 page-file 支持的 hook。pager/file fake 只保留为 ABI 占位。
+已经确定的方向：
 
-因此当前替换点是“SQLite btree API 语义层”，不是“SQLite 文件格式层”。
+- native SQLite btree 和 minweight 都实现同一个 Go `StorageEngine` interface。
+- 生成出来的 SQLite btree entrypoint 会 dispatch 到当前 btree handle 绑定的 engine。
+- path-backed minweight database 使用真实 `minweight.Open(...)` store directory，KV 数据和逻辑 btree metadata 都会持久化。
+- table/index row 按 SQLite root page number 映射到逻辑 KV。
+- 写事务走 adapter transaction overlay，commit 阶段用 `minweight.Store.WriteBatch` 发布。
+- 正常 cursor movement 走 minweight seek/range API，不再 materialize whole root。
 
-## Dispatch 入口
+当前明确不做或还不声明支持：
 
-公开入口在 `storage_engine.go`：
+- 不兼容 SQLite 物理 page image。
+- 不实现 SQLite WAL frame、wal-index、checkpoint、shared-memory。
+- 不实现 minweight 的 writable/native VFS I/O。
+- 暂不声明支持超大单写事务。
+- 不保留未发布过的 legacy raw index key fallback。
 
-- `SetStorageEngine(engine StorageEngine)` 设置当前 btree engine。
-- `NewMinweightStorageEngine()` 返回 minweight-backed engine。
+## StorageEngine 入口
+
+包级公开入口在 `storage_engine.go`：
+
+- `SetStorageEngine(engine StorageEngine)`
+- `NewMinweightStorageEngine()`
 - `StorageEngine` 是 `modernc.org/sqlite/lib.StorageEngine` 的别名。
 
-`SetStorageEngine` 只决定新 btree open 的默认 engine。已经打开的 btree handle 会绑定到打开时选中的 engine；driver connection close 会清理 sqlite3* 级别绑定，避免 allocator 复用 sqlite3* 地址后把新连接的 db-level 调用 dispatch 到旧 engine。
+核心 interface 在 `lib/storage_engine_api.go`：
 
-真正的 interface 定义在 `lib/storage_engine_api.go`。它覆盖 SQLite btree 调用面，例如：
+- `type StorageEngine interface`
+- `type nativeBtreeStorageEngine struct{}`
+- `func SetStorageEngine(engine StorageEngine)`
 
-- 打开/关闭：`BtreeOpen`、`BtreeClose`
-- 事务：`BtreeBeginTrans`、`BtreeCommitPhaseOne`、`BtreeCommitPhaseTwo`、`BtreeRollback`、`BtreeSavepoint`
-- cursor：`BtreeCursor`、`BtreeFirst`、`BtreeNext`、`BtreeTableMoveto`、`BtreeIndexMoveto`
-- 写入：`BtreeInsert`、`BtreeDelete`、`BtreeCreateTable`、`BtreeDropTable`
-- meta/状态：`BtreeGetMeta`、`BtreeUpdateMeta`、`BtreeTxnState`、`BtreeLockTable`
+各平台 wrapper 在：
 
-各平台的 `lib/storage_engine_<goos>_<goarch>.go` 把原来生成代码里的 `_sqlite3Btree*` 函数改成 dispatch：
+- `lib/storage_engine_<goos>_<goarch>.go`
+
+这些 wrapper 把原来的 generated btree call 改成 engine dispatch。例如 `_sqlite3BtreeOpen(...)` 会变成：
 
 ```go
-return storageEngine().BtreeOpen(...)
+return storageEngine().BtreeOpen(
+    btreeContext(tls),
+    btreeVFSHandle(tls, pVfs),
+    btreeCStringHandle(tls, zFilename),
+    sqliteHandle(tls, db),
+    btreeMemoryHandle(tls, ppBtree),
+    flags,
+    vfsFlags,
+)
 ```
 
-同时 `nativeBtreeStorageEngine` 实现同一个 interface，并继续调用翻译来的 SQLite btree 函数。所以切换 engine 不需要改 VDBE 上层调用；上层仍然认为自己在调用 SQLite btree。
+native engine 实现同一个方法，然后调用重命名后的翻译版 SQLite btree 函数。minweight engine 实现同一个方法，但下面走逻辑 KV。
 
-## Handle 模型
+这样 VDBE 和大部分翻译出来的 SQLite 上层代码不用理解 minweight；它们仍然认为自己在调用 btree。
 
-SQLite 生成代码仍然传入 `tls *libc.TLS` 和 `uintptr`。当前 interface 把这些裸参数包成 typed handle：
+## Engine 选择和 Handle 绑定
 
-- `BtreeContext` 保存 TLS。
-- `BtreeHandle` 表示 SQLite btree 指针或 minweight token。
-- `SQLiteHandle` 表示 owning `sqlite3*`。
-- `BtreeCursorHandle` 表示 SQLite cursor 内存。
-- `BtreeMemoryHandle`、`BtreeCStringHandle` 等用于读写 SQLite ABI 里的 out 参数和 C string。
+`SetStorageEngine` 只决定后续新 open 的默认 engine，不能决定已经打开的 btree handle 怎么 dispatch。
 
-minweight 不直接使用 SQLite btree 指针作为真实对象，而是在 `minweightStorageEngine` 内部维护 token map：
+dispatcher 维护一个 handle graph：
 
-- `btrees map[uintptr]*minweightBtree`
-- `aliases map[uintptr]uintptr`，用于把 sqlite3 handle 映射回 btree token
-- `dbs map[string]*minweightDatabase`，用于缓存当前 engine 已打开的 path-backed minweight store，并用 refcount 管理生命周期
-- `cursors map[uintptr]*minweightCursor`
+```text
+btree  -> {engine, sqlite3*}
+cursor -> btree
+db     -> {engine, refs}
+```
 
-storage-engine dispatcher 自己也维护一个更薄的 handle graph：`btree -> {engine, sqlite3*}`、`cursor -> btree`、`sqlite3* -> {engine, refs}`。这样 cursor 不直接保存 engine，db-level 调用通过 sqlite3* binding 找 engine，cursor 调用通过 btree binding 找 engine；全局 `SetStorageEngine` 只影响尚未绑定的新 open。
+效果：
 
-因此对 minweight 来说，`uintptr` 是 handle/token；`tls` 主要用于满足 SQLite ABI 的内存读写、C string、fake pager/file 等场景。
+- btree handle 永远 dispatch 到 `BtreeOpen` 时选中的 engine。
+- cursor call 通过 `cursor -> btree -> engine` 找实现。
+- sqlite3-level call 通过 sqlite3* binding 找实现。
+- connection close 会清理 sqlite3* binding，避免 allocator 复用地址后把新连接 dispatch 到旧 engine。
+- 全局 `SetStorageEngine` 切换只影响之后打开的新 btree。
 
-需要特别注意：db-level 调用如 logical backup metadata 只能把 `sqlite3*` 当 connection handle 查找当前 main btree，不能把它当稳定对象地址长期持有。连接关闭时必须删除 sqlite3* -> engine/db alias；btree/cursor 生命周期仍由各自 handle close 管理。
+这也是为什么 `_sqlite3BtreeEnter(tls *libc.TLS, p uintptr)` 这类 ABI 入口仍然可用。对 minweight 来说，`uintptr` 不必是真正的 SQLite `BtShared` 指针；它是 handle/token。dispatcher 用 token 找 engine，minweight engine 再用 token 找 Go object。
 
-## 运行时对象
+`tls *libc.TLS` 仍然有用，但不是存储状态。它主要用于：
 
-minweight 实现在 `lib/minweight_storage_engine.go`。核心对象有三层：
+- 读取 SQLite C string；
+- 写 SQLite out 参数；
+- 读写 generated SQLite struct，比如 `BtCursor`；
+- 分配或暴露 SQLite 上层期待的 fake pager/file 指针。
 
-`minweightStorageEngine`
+## Minweight 运行时对象
 
-- 全局 engine 状态。
-- 管理 btree token、sqlite3 alias、path database、cursor。
+主要实现文件：
 
-`minweightDatabase`
+- `lib/minweight_storage_engine.go`
+- `lib/minweight_storage_engine_cursor.go`
+- `lib/minweight_storage_engine_cursor_lifecycle.go`
+- `lib/minweight_storage_engine_generation.go`
+- `lib/minweight_storage_engine_roots.go`
+- `lib/minweight_storage_engine_copy.go`
+- `lib/minweight_storage_engine_integrity.go`
 
-- 共享的逻辑数据库。
-- `:memory:`/temp database 用 `minweight.New()` 创建内存 store；path-backed database 用 `minweight.Open(dir, Options...)` 打开真实磁盘 store。
-- 持有 committed `store *minweight.Store`，以及 path-backed store 的目录和 refcount。
-- 持有 SQLite btree meta、root-page 分配状态、表统计信息、PRAGMA 相关逻辑状态。
-- 持有 reader/writer/table-lock 状态。
+核心对象：
 
-`minweightBtree`
+```text
+minweightStorageEngine
+  btrees:  token -> minweightBtree
+  cursors: token/slot -> minweightCursor
+  dbs:     path key -> minweightDatabase
 
-- 单个 SQLite open btree handle。
-- 指向一个 `minweightDatabase`。
-- 保存 fake pager/file/journal 指针、SQLite db 指针、readonly/shared-cache 状态。
-- 写事务期间保存 per-writer write map、懒创建的 ordered overlay、working metadata、savepoint/statement rollback 状态；后续需要补短生命周期 statement/read-cursor generation pin 和读写集检测，显式长读事务先保持 unsupported。
+minweightDatabase
+  committed minweight.Store
+  path/refcount/lifecycle
+  logical btree metadata
+  root allocation state
+  table stats
+  generation/read-view state
+  writer and table-lock state
+
+minweightBtree
+  one SQLite btree handle
+  pointer to minweightDatabase
+  fake pager/file fields
+  transaction overlay and working metadata
+  savepoint/statement rollback state
+
+minweightCursor
+  one SQLite cursor handle
+  root, int-key/non-int-key shape
+  current store key/value
+  seek anchor/state
+  incrblob and stale-cursor metadata
+```
 
 ## 打开数据库
 
-`BtreeOpen` 做几件事：
+`BtreeOpen` 根据 SQLite filename 决定 backing store：
 
-1. 从 SQLite 传入的 filename 计算 database key。
-2. `:memory:` 和空 filename 使用独立的 `minweight.New()` 内存 store。
-3. 普通 path-backed filename 被视为 minweight store directory：不存在则由 `minweight.Open(filename, ...)` 创建目录，存在且是目录则重开已有 store。
-4. 如果 filename 已存在于 `engine.dbs`，复用同一个已打开 `minweightDatabase` 并增加 refcount；否则 `minweight.Open` 后放入 `engine.dbs`。
-5. 分配极薄的 fake `Pager`、`sqlite3_file`、journal file，让 SQLite 上层需要 pager-shaped 指针时能读到少量状态。
-6. 分配 btree token，写入 SQLite 的 `ppBtree` out 参数。
+- `:memory:` 和 temp database 使用 `minweight.New()`。
+- path-backed database 把 SQLite filename 当作 minweight store directory，用 `minweight.Open(...)` 打开。
+- engine 用 `engine.dbs` 缓存当前打开的 path-backed store，并按每个 `BtreeOpen` 增加 refcount。
+- 最后一个 `BtreeClose` 会从缓存删除 database，并调用 `Store.Close()`。
 
-path-backed store 关闭时按 refcount 管理：每个 path-backed `BtreeOpen` 增加 refcount，最后一个 `BtreeClose` 从 `engine.dbs` 删除并调用 `store.Close()`，释放 minweight_store 目录锁并触发 minweight_store 的 close checkpoint。
+所以 path-backed minweight database 是 minweight store directory，不是 SQLite page file placeholder。逻辑 metadata 存在一个内部 minweight key 里，包含 root allocation、btree meta、table/index root kind、page-size 这类逻辑状态。
 
-如果 filename 已存在且是普通 SQLite page file，minweight 不会假装能原地写入；`minweight.Open` 会失败并向 SQLite 返回 open/corrupt 类错误。需要导入 SQLite page file 时只能走单独的 read-only snapshot import 路径。
+当前 read-only path open 是 fail fast。`mode=ro` 和 chmod-only readonly 不算支持，直到 minweight_store 提供真实 read-only open/view 语义。
 
-当前没有真实 read-only path open。`mode=ro`、chmod-only 只读打开会 fail fast，直到 minweight_store 提供 read-only store/open-view 语义。
-
-这里的 fake 只应该是 ABI 占位，不应该扩展成重型 pager/page-file 模拟。只要逻辑能力不存在，就应该明确 fail fast 或标为 unsupported，不能用 fake 让用户以为已经支持 SQLite page file、WAL 或 VFS。
+已有 SQLite page file 不能直接当 writable minweight DB 打开。当前 VFS 路径只是 read-only logical snapshot import：先用 native btree 读 VFS-backed page file，逻辑 serialize，再 replay 到 minweight，并把 minweight handle 标成 readonly。
 
 ## KV 映射
 
-SQLite btree 里每张 table/index 都有一个 root page number。minweight 继续使用这个 root page number 作为逻辑 btree id。`sqlite_schema` 本身是 root page `1`。
+SQLite btree 用 root page number 标识每棵 table/index btree。minweight 继续把 root page number 当逻辑 root id。
 
-### Table btree
+`sqlite_schema` 是 root page `1`。
+
+### Rowid table
 
 普通 rowid table 是 int-key btree：
 
@@ -120,327 +162,165 @@ key   = 't' || root:u32be || sortableRowid:u64be
 value = SQLite record payload bytes
 ```
 
-`sortableRowid` 的编码是：
+`sortableRowid` 编码：
 
 ```text
 uint64(rowid) ^ (1 << 63)
 ```
 
-然后按 big-endian 写入。这样 signed int64 rowid 的字节序和数值排序一致。
+然后 big-endian 写入。这样字节序和 signed int64 rowid 排序一致。
 
-### Index / WITHOUT ROWID btree
+### Index / WITHOUT ROWID
 
-当前 index 和 non-int-key btree 新写入使用 versioned sortable key：
+index 和 non-int-key btree 使用 versioned sortable key：
 
 ```text
 key   = 'i' || root:u32be || 0x00 || sqliteComparableKey
 value = SQLite index record bytes
 ```
 
-这里的 `SQLite index record bytes` 是 SQLite VDBE 已经编码好的 record，继续作为 value 和 btree payload 返回给 SQLite 上层；`sqliteComparableKey` 是 adapter 根据 `KeyInfo` 生成的物理 KV suffix，目标是让 minweight 的 byte order 等于 SQLite btree order。旧的 raw key 布局 `i || root || SQLite index record bytes` 不再兼容读取；项目尚未发布，没有迁移压力，遇到旧 raw key 直接按 corrupt/fail-fast 处理。
+value 保留 SQLite 原始 record bytes，继续作为 SQLite btree payload 返回给上层。
 
-`WITHOUT ROWID` 表在 SQLite btree 层表现为 non-int-key btree，因此走 index-like 路径。它的主键 record bytes 由 SQLite 上层生成，minweight 只负责存取和调用 SQLite comparator。
+`sqliteComparableKey` 是 adapter 按 `KeyInfo` 生成的物理 key suffix，目标是让 minweight byte order 等于 SQLite btree order。
 
-当前 `sqliteComparableKey` 底座已支持 SQLite record 的 NULL、INTEGER、REAL、TEXT、BLOB 存储类，以及 `BINARY`、`NOCASE`、`RTRIM`、DESC 排序。NaN 按 SQLite 比较语义编码为 NULL。`KEYINFO_ORDER_BIGNULL`、非 UTF-8 `KeyInfo`、没有 sort-key 能力的自定义 collation 会 fail fast，不能静默退回全表扫描作为正常路径。
+当前支持：
 
-当前 non-int-key `BtreeFirst` / `BtreeLast` / `BtreeNext` / `BtreePrevious` 已经能对 versioned key 使用 `SeekGE` / `ReverseScanRange`，并 merge 当前 writer overlay。`BtreeIndexMoveto` 也会从 `UnpackedRecord` / `TMem` 生成 sortable probe key，用 `SeekGE` 定位，再调用 `_sqlite3VdbeRecordCompare` 验证并返回 SQLite 期待的 compare result。未发布的旧 raw index key 格式不再兼容，遇到时按 corrupt/fail-fast 处理。
+- SQLite storage class：NULL、INTEGER、REAL、TEXT、BLOB。
+- collation：`BINARY`、`NOCASE`、`RTRIM`。
+- ASC 和 DESC。
 
-## Cursor 读路径
+当前 fail-fast：
 
-`BtreeCursor` 会：
+- unsupported custom collation；
+- non-UTF-8 `KeyInfo`；
+- `KEYINFO_ORDER_BIGNULL`；
+- 未发布过的 legacy raw index key。
 
-1. 初始化 SQLite 原始 `BtCursor` 内存中上层依赖的少量字段。
-2. 创建 `minweightCursor`，记录 root、是否 int-key、是否 writable。
-3. 把 cursor handle 放进 `engine.cursors`。
-
-当前读操作大致如下：
-
-- `BtreeFirst` / `BtreeLast` / `BtreeTableMoveto` 以及普通 `BtreeNext` / `BtreePrevious` 已经使用 seek/range API。
-- `BtreeIndexMoveto` 使用 sortable probe key 定位。完整 key 优先 exact `Get`，probe 已超过 root max key 时直接返回 miss；其它 prefix/range probe 才走 `SeekGE` 并 merge 当前 writer overlay。
-- int-key table 按 rowid 排序。
-- `BtreeIndexMoveto` 的最终 compare result 仍来自 SQLite record comparator，避免 adapter 自己重新定义 SQLite record 比较语义。
-- `BtreePayload` / `BtreePayloadFetch` 把当前 row 的 payload 写回 SQLite 期待的内存位置。
-
-cursor 会记录 `dataVer`。写入后 database 的 `dataVer++`，stale table/index cursor restore 会优先用 point lookup 和 seek 定位回原 row 或相邻 row；versioned index cursor 只允许依赖当前 row storeKey 或 last-row storeKey 继续 seek。正常路径没有 `loadRows()` / `refreshCursorRows()` fallback，也没有 cursor `rows/index` materialized 状态；没有 versioned store-key 锚点的 index cursor 会 fail fast 为 corrupt，而不是扫描 root。
-
-adapter 不应该把当前 root 甚至整库扫出来 materialize 成 `[]minweightRow`，再用 slice index 假装 cursor；这条路径已经从正常 cursor movement 中删除。
-
-正确方向是 seek cursor：
+旧 raw 格式：
 
 ```text
-cursor:
-  root
-  lowerBound
-  upperBound
-  currentKey
-  currentValue
-  direction
-  valid
+'i' || root:u32be || SQLite index record bytes
 ```
 
-在 minweight_store 目前没有长期 iterator 的情况下，cursor 可以用已有的 `SeekGE`、`SeekLE`、`ScanRange`、`ReverseScanRange` 实现：
+已经明确不支持。这个项目还没发布 minweight 格式，没有兼容压力；保留 fallback 会重新引入全 root scan/sort，方向不对。
 
-- `BtreeFirst`：`SeekGE(rootLowerBound)`，检查 key 是否小于 `rootUpperBound`。
-- `BtreeNext`：`SeekGE(nextLexicographicKey(currentKey))`，检查 key 是否仍在 root range 内。
-- `BtreeLast`：`SeekLE(rootUpperBoundPrev)`，检查 key 是否大于等于 `rootLowerBound`。
-- `BtreePrevious`：`SeekLE(prevLexicographicKey(currentKey))`，检查 key 是否仍在 root range 内。
-- 如果用 `ScanRange`，也只能 visit 第一个 item 后立刻停止，不能把整个 range 收集到内存。
+## Cursor 模型
 
-minweight_store 未来可以提供长期 iterator；如果有长期 iterator，adapter 可以直接把 iterator 放进 cursor state。但无论有没有长期 iterator，adapter 都不能全表扫出来假装 cursor。
+minweight cursor 是 seek cursor，不是 materialized root。
 
-如果另一个 handle 正在写事务中，非 writer handle 的 cursor、row-count、meta 等读路径不应该看见 writer overlay。当前代码仍有 transaction-start snapshot 兼容残留，用来挡住未提交写；这能覆盖基本 committed-view 可见性，但方向不对。
+正常 movement：
 
-正确方向是 statement/read-cursor pin 一个 committed generation，writer commit 后旧 generation 只在仍有 reader pin 时留在内存里。这样读路径按 key/range 查自己的 pinned view，不复制整库，也不遍历 snapshot items。历史 `snapshot()` / `minweightSnapshotGet()` 这类 `O(DB)` 读放大 helper 已经从普通 cursor/check 路径删除；剩余 transaction-start read-view 兼容还要继续迁到 generation pin，只保留 logical backup/serialize 这类本来就需要全量逻辑快照的功能。
+- `BtreeFirst`：seek 到 root lower bound。
+- `BtreeLast`：reverse seek 到 root upper bound。
+- `BtreeTableMoveto`：table key exact lookup 或 `SeekGE`。
+- `BtreeIndexMoveto`：生成 sortable probe key，用 `SeekGE` 定位，再用 SQLite 自己的 `_sqlite3VdbeRecordCompare` 验证。
+- `BtreeNext`：从 current key 后面继续 seek。
+- `BtreePrevious`：从 current key 前面 reverse seek。
 
-## 写路径
+seek path 会 merge：
 
-当前写入入口不再直接落到 committed minweight store。写事务开始后：
+- committed minweight store；
+- pinned reader 需要的 retained old-generation value；
+- 当前 writer 自己的 overlay。
 
-- `BtreeInsert` / `BtreeDelete` / `BtreePutData` 写入 per-writer write map。ordered overlay 只在当前事务需要 range cursor movement 时懒创建。
-- `BtreeCreateTable` / `BtreeDropTable` / `BtreeClearTable` / `BtreeUpdateMeta` 修改 writer 的 working metadata。
-- savepoint 和 statement rollback 保存/恢复 write map、ordered overlay 与 working metadata。
-- `BtreeCommitPhaseTwo` 把 write map delta 转成一个 `minweight.Store.WriteBatch`，再一次性发布到 committed store；path-backed store 的逻辑 metadata 同批写入内部 meta key。
+`loadRows()` / `refreshCursorRows()` 已经从正常 cursor movement 中删除。cursor 如果缺少 versioned store-key 或 last-row anchor，会 fail fast 成 corrupt，而不是扫描整棵 root。
 
-写完会更新 table row count、min/max rowid、root 分配状态、`dataVer` 等逻辑状态。incremental blob cursor 会在相关 row 被替换、删除、清表或 drop table 时失效。
+这条规则很重要：把 root 扫进 `[]minweightRow` 再用 slice index 假装 cursor，本质上把 minweight ordered KV 优势又吃掉了。
 
-### 当前性能 checkpoint
+## 事务模型
 
-2026-06-04 的 OLTP 诊断确认：`minweight_store` 本体不是主要瓶颈。直接 path-backed core 可以在几十毫秒内批写 60k 个 table/index-like entry，点读和 `SeekGE` 也在百万 ops/s 量级。此前 SQL bulk insert 慢到秒级的主因是 adapter 写事务 overlay seek：`indexOverlayCandidate` / `tableOverlayCandidate` 每次 cursor seek 都遍历整个 `tx.writes`，导致大事务插入接近 `O(n^2)`。
+native SQLite btree 直接写 pager 管理的 page。minweight 走 adapter transaction overlay。
 
-当前代码已经把 write set exact lookup map 和有序 overlay 分开：
+写事务流程：
 
-- `tx.writes map[string]minweightTxnWrite` 保留给 exact lookup、commit、read/write conflict bookkeeping。
-- `tx.overlay *minweight.Store` 是懒创建的内存 minweight store，保存当前事务改过的 key，用于 table/index root 的 `SeekGE` / `SeekLE` overlay merge；纯 exact lookup / append 写事务不应该主动创建它。
-- savepoint / statement rollback 会恢复 write map 并重建 overlay，避免 map 和有序 overlay 分叉。
-- committed store seek 命中当前事务 tombstone 时会跳过，命中当前事务 overwrite 时使用 overlay value。
+1. `BtreeBeginTrans(... wrflag != 0)` 抢 single writer。
+2. `BtreeInsert`、`BtreeDelete`、`BtreePutData`、root allocation、metadata write 都写 per-writer state。
+3. exact lookup 走 write map。
+4. range/cursor movement 只有需要时才懒创建 in-memory ordered overlay。
+5. statement rollback / savepoint rollback 恢复 write map、overlay、working metadata。
+6. `BtreeCommitPhaseTwo` 把最终 write map 转成一个 `minweight.Store.WriteBatch`。
+7. commit 发布 KV、logical metadata、root stats 和新的 committed generation。
 
-这把 bulk insert 规模曲线从近二次拉回接近线性。随后 root stats 又补了两类写入 fast path：monotonic table append 可以用 `maxRowid` 直接返回 table moveto miss，index probe 超过 non-int-key root 的 `maxKey` 时可以直接返回 index miss；这避免 bulk insert 为查重/定位创建 ordered overlay。当前 `tools/minweight_oltp_bench` 的本机结果显示：PK/二级索引点读、mixed small transaction 已经快于 native btree；bulk insert、update、upsert 仍慢于 native，但已经从十几秒/几十秒级降到亚秒级。
+这个模型替掉了旧的 direct-write-plus-whole-store-snapshot。rollback 不再复制或 replay 整个 committed store。
 
-已经完成的热路径优化：
+reader 模型：
 
-- `BtreeInsert` 在 SQLite 传入非零 `seekResult` 时信任“相邻定位、key 不存在”的语义，跳过额外 exact `bt.get(key)`；可能 overwrite 的路径仍然查存在性。
-- writable table cursor 的 `BtreeTableMoveto` 先做 exact rowid lookup，命中后不再 `SeekGE`；read-tracked cursor 保持 seek 路径，避免破坏 pinned-reader / incrblob 边界。
-- `visibleDataVer` / `visibleTable` / `visibleMeta` 对当前 generation 直接读字段，不再为了单个值 clone 整个 metadata state。
-- commit 在没有 pinned reader 时不再为每个 write key 重新 `store.Get` 构造 before/after history；这种单连接 OLTP 常见路径只发布 `WriteBatch` 和新 generation。有 pinned reader 时仍保留旧版本 before image。
-- versioned index 物理 key 已从 `comparable fields + full-record suffix` 缩成纯 SQLite-comparable fields，value 保留原始 SQLite record；full-key `BtreeIndexMoveto` probe 可以 exact `Get`，prefix/range probe 仍走 `SeekGE` 并在需要时调用 `_sqlite3VdbeRecordCompare`。
-- read-range tracking 直接接管 seek 函数生成的边界，不再二次 clone；versioned index range check 也简化为 root/version prefix check。
-- transaction write 记录带 `base` 标记，同一事务内 insert 后又 delete 的 key 可以从 write set / ordered overlay 中移除，避免把纯事务内中间态提交成 tombstone。
-- SQL `BtreeInsert` 使用 owned-write 入口：`KeyBytes` / `DataBytes` 已经把 SQLite payload copy 到 Go memory，普通 helper 仍保留 caller-owned copy 语义；delete stats/data version 更新在 active transaction 里直接改 `tx.state`，不再 clone visible metadata。
-- 写事务 hot path 不再给每次 point read 自动填充 `tx.reads`。当前协议是严格 single-writer，普通 SQL 写事务期间不会有另一个 writer 提交；读集冲突检测函数仍保留，但测试直接构造 read set，而不是让 UPDATE 为每个 base lookup 付出 string/map 分配。
-- `BtreeInsert` 在当前 cursor 已经指向同一个物理 key 时直接认定 existed，避免 UPDATE replace 同一 row/index entry 时再次 exact `Get`；`BtreeDelete` 在 cursor 当前项证明 key 已存在时走 known-existing delete，避免删除旧 index entry 前再查 committed store。
-- `BtreeInsert` 替换旧 index key 时拆开两个语义：旧 key 删除结果只用于 root row-count 统计，新 key 的事务 `base` 状态只表示新 key 自己是否来自 committed base。这样当前事务中新建的 index key 继续保持 `base=false`，后续重复 update 可以折叠中间态，而不是留下伪 tombstone。
-- `minweightComparableMemKey` 构造 probe key 时对 SQLite `Mem` 字节使用临时 view，最终 sortable key 仍写入自己的 buffer，避免 BINARY/RTRIM 文本和 blob probe 的一次额外 payload copy。
-- comparable-key builder 现在把每个字段直接 append 到最终 key buffer，不再为每个字段先分配临时 `fieldKey`；indexed-column UPDATE profile 里 `minweightComparableIndexProbeKey` 已经从明显热点降成尾部成本。
-- transaction write-map key 绑定到已拥有的 `write.key` backing array；savepoint clone 和 commit-history clone 会重新绑定到 clone 后的 key，避免热路径 `string(write.key)` 拷贝，同时不留下悬挂 backing array。
-- `setWriteOwned` 只有在本次 write 的 `base=false` 时才查 previous write；`base=true` 的 table overwrite / base tombstone 不再为保留 base provenance 多做一次 map lookup。
-- known-existing delete 直接使用 cursor 当前项已经拥有的 `storeKey` 写 tombstone，不再先 clone 旧 index key 再让 `setWrite` clone 第二次。
-- cursor dispatch 仍保持 `cursor -> btree -> engine` handle graph；cursor-bound 调用优先读取 `BtCursor.FpBtree` 直接解析 btree binding，只有 raw btree 缺失时才回退 cursor map。minweight engine 自己的 cursor/btree map 查找使用 RWMutex read path。
-- minweight cursor lookup 使用 `BtCursor.FpBt` 保存 1-based cursor slot id；真实 Go cursor 对象仍由 engine slice/map 持有，不把 Go 指针塞进 SQLite ABI `uintptr`。普通 cursor-bound btree call 可以先用 slot 做数组 lookup，再回退到 cursor map；cursor map 继续保留给 incrblob invalidation 和 trip-cursor 扫描。
-- 普通 no-incrblob table write 先用 atomic cursor count 判断是否需要 invalidation；没有 incremental blob cursor 时不再拿 engine cursor-map 锁。
-- commit 把 write map 的最终态转成 `WriteBatch` 时先写 tombstone delete，再写 final put。不同 key 之间没有 SQLite 语义顺序要求；delete-first 让 minweight/minpatricia 先移除旧二级索引项，再安装最终 table/index record，降低大 UPDATE 提交阶段成本。
-- 当前 generation 的 `bt.get` / seek 路径直接复用 minweight_store 已经返回的 owned value；只有 commit-history before image 仍 clone。这去掉了 table moveto 和 cursor seek 的一次额外 payload copy。
-- `minweightDecodeRow` / table row decode 现在接管 minweight item 的 owned key/value，不再为每个 seek row 再 clone 一份 cursor row。
-- indexed-column UPDATE 中 `BtreeInsert` 替换旧 index key 时，当前 cursor 已经证明旧 key 存在，因此走 known-existing delete，不再用普通 delete 回查 committed store。长 profile 中 `BtreeInsert -> get` 已从主要热点降到小头。
-- SQL 层新增 NOCASE comparable-key 覆盖：非唯一 NOCASE index 的 duplicate normalized prefix 不会互相覆盖，NOCASE UNIQUE 仍拒绝等价值，更新后旧索引项消失、新索引项可 forced-index 查到。
+- 普通 autocommit read cursor pin 一个短生命周期 committed generation。
+- writer 可以在这些短 reader 打开时 commit。
+- 只要 reader 还可能访问旧 generation，旧 value 会留在内存里。
+- 显式长读事务当前仍不支持，可能让 writer commit 返回 `SQLITE_BUSY`。
+- 还不声明 WAL-like 长 reader 语义。
 
-已证伪、不要重复的优化：
+已经有的 optimistic foundation：
 
-- 大事务 pure-Put commit 前按 physical key 排序再构造 `minweight.Store.WriteBatch`。这个实验已经跑过不止一次：排序会增加 adapter 侧 sort/alloc 成本，且没有降低 end-to-end OLTP 中位数。2026-06-04 复测中，`bulk_insert_tx` minweight 中位数从当前基线约 `111.9ms` 变成约 `120.7ms`，`update_by_pk_tx` 和 `upsert_by_pk_tx` 也更慢。除非 `minweight_store.WriteBatch` / `minpatricia` apply 语义改变，否则不要再尝试这个方向。
-- 复用 transaction ordered overlay 不是当前 bulk insert 的主线。2026-06-04 默认 debug report 的 10k rows bulk breakdown 显示：native insert loop `32.764917ms`，minweight insert loop `33.237916ms`；native commit `2.87125ms`，minweight commit `29.108959ms`。差距集中在 commit，profile 指向 `minweight_store.WriteBatch` / `minpatricia` apply，而不是 `tx.overlay.Put`。因此 bulk insert 后续不要优先做 overlay reuse，除非新的 profile 重新显示 overlay 是热点。
-- 复用 `minweightCursor` Go object 的 cursor pool。这个实验会碰 cursor 生命周期边界：`TestMinweightIncrblobCursorInvalidatedByClearTable` 直接失败，`BtreeClearTable` changes 从 `1` 变成 `0`。保留 cursor slot id 这种 lookup 优化可以，但不要在没有更完整 cursor ownership 设计前回收/复用 cursor 对象本身。
+- writer point read set；
+- seek path 的 bounded range read set；
+- write set；
+- committed generation number；
+- live old generation 的 before/after image；
+- direct adapter check 里 stale writer snapshot 返回 `SQLITE_BUSY_SNAPSHOT`。
 
-下一步优先级：
+当前 single-writer SQL 边界下，不是所有 conflict shape 都能通过自然 SQL 跑出来。不要在显式 transaction view 生命周期完成前宣传完整 MVCC。
 
-- update/upsert 大事务的 index `SeekGE` 大头已经被 full-key exact lookup 打掉；`pprof` 确认 raw minweight KV 只占小头，剩余主要是 SQLite VDBE、`BtreeInsert`、exact base lookup、SQLite record-to-comparable-key 编码和 adapter 分配/GC。
-- write-set churn 还要继续降：重复二级索引 update 应该尽量保持最终态，减少中间 tombstone；同时继续避免给每次 delete 增加 committed-store read。还要继续扩大 SQL/collation 覆盖，确认纯 comparable key 物理格式在 RTRIM、numeric 等价、DESC、WITHOUT ROWID 等边界上都保持 SQLite btree 顺序。
-- read-tracked table cursor 也有 exact-hit 优化空间，但必须先把 pinned generation 和 incrblob/clear-table 语义测清楚，不能把普通 read cursor 直接切到 bypass seek 的路径。
+## Metadata、Root 和 Logical 功能
 
-## 事务和锁
+minweight 维护 SQLite SQL 语义需要的逻辑 btree 状态：
 
-当前 minweight 对齐的是一部分 SQLite btree 可见行为，不是完整 MVCC。目标模型也不应该实现成 SQLite pager/WAL，而应该在 adapter 层做 optimistic transaction view。
+- schema/user version 等 btree meta；
+- root page allocation 和 free root reuse；
+- table/index root kind；
+- row count、min/max rowid stats；
+- page size、reserve、auto-vacuum、secure-delete 等逻辑设置；
+- fake pager/file 指针；
+- logical serialize/deserialize 和 logical backup。
 
-写事务开始时，writer 获得单 writer slot，并创建 overlay 与 working metadata。已有 writer 会让新的 writer 返回 `SQLITE_BUSY`，带 busy handler 的连接可以等待。rollback、savepoint rollback 和 statement rollback 只丢弃/恢复 overlay 与 working metadata，不再扫描整库、复制整库或重建 store。
+root maintenance 对 int-key 和 versioned non-int-key root 使用 range/seek path。clear、drop、root move、copy-file、integrity check、cursor restore 不再走 whole-root materialization。
 
-commit 时，`BtreeCommitPhaseOne` 检查其它 reader；有冲突则调用 SQLite busy handler 或返回 `SQLITE_BUSY`。`BtreeCommitPhaseTwo` 用 `minweight.Store.WriteBatch` 发布写集和 path-backed metadata，然后清理 transaction state、locks、savepoint/statement state。
+logical backup / serialize 不是 SQLite page-image backup。它们是逻辑 schema/data 备份，目前已覆盖 `sqlite_sequence`、generated column、普通 rowid、FTS5 virtual table、root reuse metadata 等关键 case。
 
-下一步事务模型应改成读写集检测：
+## 不支持项和 Shim 边界
 
-- database 维护递增 `generation`，每个 committed key/meta/range 有可校验的版本信息。
-- statement reader 或普通 cursor 打开时 pin 当前 generation；关闭 cursor/statement 后 release。旧 generation 只要仍可能被 reader 访问，就作为内存 read view 留住；最后一个 reader release 后清理。
-- writer 记录 `readSet`、`rangeReadSet`、`writeSet` 和 working metadata。读自己的写时走 `writeSet + pinned/base generation` merge。
-- commit phase one 校验 read set/range read set 从 writer base generation 到当前 generation 没被其它已提交 writer 改动；stale snapshot 冲突返回 `SQLITE_BUSY_SNAPSHOT`，不覆盖 committed store。
-- commit phase two 才把 write set 通过 `minweight.Store.WriteBatch` 发布到 minweight_store，并发布新的 in-memory generation。
-- 显式长读事务先不支持：不能让用户以为有完整 MVCC。普通 autocommit statement/read cursor 已经使用短生命周期 pinned generation；需要跨多个 statement 保持旧 view 的事务继续保持 rollback-journal busy 语义。
+这些边界要持续写清楚：
 
-shared-cache 锁：
+- WAL 禁用。minweight 下 `PRAGMA journal_mode=WAL` 保持 rollback `delete`，不能创建 fake `-wal`。
+- VFS 没有实现。当前只是 read-only snapshot import。
+- `sqlite_dbpage` 只有 logical page-1/header shim，不是真实多页 DB image。
+- mmap/cache/spill/persist-WAL 只是 visible-state shim，不是 pager 功能。
+- path-backed minweight DB 是 minweight store directory，不是 SQLite page file。
+- read-only path-backed minweight open 现在 fail fast。
+- 超大单写事务是已知 adapter 限制，修好前不要混入常规 OLTP 报告。
+- unknown btree/cursor handle 应该返回 SQLite error；panic path 是技术债。
+- error mapping 还需要从 generic `SQLITE_ERROR` 细化到 IOERR/BUSY/CORRUPT 等。
 
-- `BtreeLockTable` 用 `tableLocks` 模拟表级 read/write lock。
-- read/read 可以共存。
-- read/write 或 write/read 冲突返回 `SQLITE_LOCKED_SHAREDCACHE`。
-- transaction end 释放该 handle 持有的 table locks。
+## 后续优先级
 
-当前模型能覆盖单连接 rollback、savepoint rollback、statement rollback、基本多连接 committed-view 可见性、部分 shared-cache 锁和 busy 行为。但它仍有明确问题：
+高价值方向：
 
-- 显式长读事务还没有稳定 read view；在上面的 generation pin 模型落地前，不支持长事务。
-- raw index key 旧格式已经不支持；open/stat recompute 和 integrity check 会把它视为 corrupt，而不是隐藏地 materialize。
-- 剩余整库/整 root 扫描主要在 transaction-start read snapshot 和替换 whole-btree 的 copy 类路径；`BtreeIntegrityCheck` 已经改成 streaming full scan 或 selected-root range scan，正常 cursor movement 不再 materialize root rows。
-- WAL 只能等 stable read view 后做逻辑事务模式，不能假装有 SQLite WAL frame。
+1. 继续优化 SQL 写路径，优先级高于继续堆 PRAGMA shim。
+2. 大单事务写测试和读/小事务 benchmark 分开。
+3. 显式长读事务要么稳定 fail fast，要么完成 generation-pinned lifecycle。
+4. 降低 comparable secondary key、base exact lookup、write-set churn、commit batching 的 adapter 成本。
+5. 继续按 ownership boundary 拆 `lib/minweight_storage_engine*.go` 的大函数/大文件。
+6. legacy raw index key 保持删除；除非已经发布格式需要迁移，否则不要加 fallback。
+7. WAL/VFS/page-image 不做假支持，实现前保持 unsupported。
 
-因此下一步不是补 pager/VFS/dbpage shim，而是把 read/write set validation、in-memory generation pin 和剩余 whole-root rewrite 补上。
-
-### 后续方向：adapter transaction view，不要求 minweight_store MVCC
-
-`minweight_store` 当前提供的是有序 KV、`WriteBatch`、`SeekGE`、`SeekLE`、`ScanRange`、`ReverseScanRange` 和自己的 WAL replay；它没有对外的 transaction snapshot / MVCC API。因此 SQLite 事务语义应由 sqlite-minweight adapter 负责。目标不是支持任意长事务，而是支持短生命周期 statement/read-cursor view 和写事务提交校验：
-
-```text
-db.committed: *minweight.Store
-db.generation: u64
-db.memoryVersions: pinned committed deltas
-
-read statement/cursor:
-  viewGeneration = current generation
-  readSet/rangeReadSet = keys/ranges actually read when needed for validation
-  release on cursor/statement close
-
-write transaction:
-  baseGeneration = generation captured at BEGIN IMMEDIATE/EXCLUSIVE or first write
-  readSet        = keys/meta read by this writer
-  rangeReadSet   = root/key ranges read by this writer when range stability matters
-  writeSet       = ordered overlay / write log
-  metaDelta      = working metadata / root allocation / table stats
-```
-
-规则如下：
-
-- `BtreeInsert`、`BtreeDelete`、`BtreeCreateTable`、`BtreeDropTable`、`BtreeUpdateMeta` 不直接写 `db.committed`，只写当前 writer 的 `delta` 和 working metadata。
-- 当前 writer 自己读取时，`Get` 和 table/versioned-index range seek merge `baseGeneration + retained before-images + writeSet`；writeSet 里的 put 覆盖 base，delete 隐藏 base，同时记录 read set/range read set。
-- 其它连接读取自己的 pinned statement/cursor generation 或当前 committed generation，看不到未提交写。
-- `BtreeBeginStmt` 和 `BtreeSavepoint` 记录 delta/working metadata 的轻量事务状态；`ROLLBACK TO` 恢复该状态；整事务 `ROLLBACK` 直接丢弃 delta。
-- `BtreeCommitPhaseOne` 校验 writer 的 read set/range read set。若 baseGeneration 之后被冲突写改过，调用 busy handler 或返回 `SQLITE_BUSY`/`SQLITE_LOCKED`；不能覆盖 committed store。
-- `BtreeCommitPhaseTwo` 把 writeSet 转成 `minweight.Store.WriteBatch`，一次性提交到 `db.committed`，发布新 generation，并把旧 generation 留在内存里直到所有可能访问它的 reader release。
-
-这样 rollback 成本是 `O(本事务写集)`，不是 `O(整个 DB)`；隔离靠 adapter overlay 和锁协议保证，不需要 minweight_store 提供多版本。
-
-WAL 语义不是 pager hook，而是 transaction view 的策略变化。只有当短 reader pin 和旧 generation 内存保留已经稳定，且明确支持对应生命周期时，才可以让 writer commit 不等待旧 reader。没有这个能力时，`PRAGMA journal_mode=WAL` 应 fail fast 或保持 delete 模式，不能只让 `_sqlite3PagerWalSupported` 返回 true。
-
-如果 minweight_store 后续提供 immutable snapshot / COW view，adapter 可以直接引用它；在此之前，adapter 需要自己维护 read view 边界，并继续保证未提交 overlay 不进入 committed read path。
-
-## 重新规划
-
-下一步不再优先补 pager/VFS/dbpage 表面兼容，而是按下面顺序推进 btree 语义：
-
-1. 已完成：path-backed persistence 从 `minweight.New()` + placeholder file 改为 `minweight.Open(filename, options...)`；`BtreeClose` 在最后一个 handle 关闭时从 `engine.dbs` 删除并调用 `store.Close()`。测试覆盖 close/reopen 后数据仍在，且换一个 `NewMinweightStorageEngine()` 后仍能读到同一路径数据。
-2. 已完成：清理 WAL 半支持。未验证的 `StorageEnginePagerWalSupport` / `_sqlite3PagerWalSupported` hook 已移除；minweight 不创建 `-wal` placeholder，`PRAGMA journal_mode=WAL` 在当前阶段保持 rollback `delete` 模式，`SQLITE_FCNTL_PERSIST_WAL` 只保留为可见 FileControl 状态，不代表 WAL 支持。
-3. 已完成：修复 sqlite3* 复用后的 stale engine binding。连接关闭会清理 db-level binding；旧连接仍通过已经打开的 btree/cursor handle dispatch，新连接不会继承旧 engine 的 db alias。
-4. 已完成：transaction overlay + WriteBatch commit。写入口写 per-writer delta 和 working metadata；commit phase two 用 `minweight.Store.WriteBatch` 批量落到 committed store；rollback/savepoint/statement rollback 恢复或丢弃 overlay，不再扫描/重放整库。
-5. adapter view 接口：读路径已经不再用 writer whole-store snapshot 隐藏未提交写；int-key table cursor movement、versioned non-int-key sequential movement、versioned-root `BtreeIndexMoveto` 已经只依赖 `Get`/`SeekGE`/`SeekLE`/`ReverseScanRange` 和 overlay。下一步要把剩余 snapshot read path 换成 generation pin + read/write set validation；显式长读事务先不支持。
-6. 部分完成：seek cursor / root maintenance。int-key table cursor 的 `First`/`Last`/`TableMoveto`/`Next`/`Previous` 已经从 materialized root rows 迁到 `SeekGE`/`SeekLE`；non-int-key 顺序 cursor movement 已经迁到 versioned key 的 `SeekGE`/`ReverseScanRange` 并 merge overlay；versioned index cursor 的 current/last-row anchor 和 `BtreeIndexMoveto` 已经迁到 sortable key seek，cursor 内部不再保留 materialized `rows/index` 状态；cursor movement/positioning 入口已经拆到 `lib/minweight_storage_engine_cursor.go`，cursor lifecycle/payload/incrblob 入口已经拆到 `lib/minweight_storage_engine_cursor_lifecycle.go`。stale cursor restore、int-key stats recompute、int-key 和 versioned non-int-key `clearRoot`/`moveRoot` 也已经用 seek 维护；`BtreeCopyFile` 已经从 snapshot/restore 中间层换成 target overlay / `WriteBatch` copy。raw index key 旧格式已删除兼容路径。
-7. 已完成底座：`sqliteComparableKey` 为 index / WITHOUT ROWID btree 生成 versioned physical key。内置存储类、内置 collation 和 DESC 先支持；无法编码的自定义 collation、BIGNULL 和非 UTF-8 KeyInfo fail fast。
-8. 部分完成：optimistic transaction view。当前已有 committed generation、autocommit cursor 短 reader-view pin、旧 generation key/state retention/prune、pinned-generation point/range/metadata read reconstruction、writer point/range read set、seek-path result-bounded byte-range read set、commit 冲突校验和 direct adapter tests；ordinary open read cursor 不再阻塞 writer commit，会继续读 pinned old view；显式 read transaction 仍保持 rollback-journal `SQLITE_BUSY` 语义。还缺 SQL 层 `SQLITE_BUSY_SNAPSHOT` 传播覆盖，以及把剩余普通读可见性从 transaction-start snapshot 完整迁到 generation view。
-9. 已完成：raw index key 策略。这个项目还没有发布，所以不保留旧 raw key 兼容；新写入始终使用 versioned `sqliteComparableKey`，旧 raw key 直接 fail fast。
-10. 在 transaction view 之后再做 WAL 逻辑模式：`PRAGMA journal_mode=WAL` 只改变 reader/writer commit policy 和 view 生命周期，不创建真实 WAL frame。没有稳定旧 view 时返回 delete 或 unsupported。
-11. 最后补逻辑 backup/serialize、constraints/triggers/incremental blob 和 shared-cache 边界测试；page-image、VFS、mmap、dbpage 继续留在低优先级 shim。
-
-## 逻辑备份和序列化
-
-native engine 的 `Serialize` / `Deserialize` 使用 SQLite page image。minweight 没有真实 page image，因此走逻辑 snapshot：
-
-- schema SQL 和 row data 通过 SQL 层重放。
-- root page、`nextRoot`、`freeRoots` 等隐藏分配状态被额外保存，避免 round-trip 后 root 分配顺序漂移。
-- backup/restore 复用同一套逻辑 replay 思路。
-
-这能保持 SQL 语义和 rootpage 可见状态，但不是 SQLite 文件格式序列化。
-
-## Fake / Shim 清单和原则
-
-SQLite 上层仍有一些地方会碰 pager/file-shaped 状态。minweight 当前存在几类 fake/shim，必须按轻重和语义边界区分。
-
-### 轻量 ABI 占位
-
-- fake `Pager` / fake `sqlite3_file` / fake journal file：只保存 SQLite 上层会读取的少量字段，例如 page size、readonly、data version、filename、journal name。
-- readonly 标记：用于 `sqlite3_db_readonly` 和写事务拒绝。
-- `BtreePager` 返回 fake pager pointer：只允许上层读取极少量状态，不能让 pager 路径真的执行 page cache、journal、WAL 或 mmap I/O。
-
-这类 fake 是为了让 btree interface 能接住 SQLite ABI，成本很小，可以保留。但它们不能继续膨胀成 pager 的替代实现。
-
-### 低价值可见状态 shim
-
-- `PRAGMA page_size`、reserve bytes、secure_delete、auto_vacuum、max_page_count、cache_size、cache_spill：只是逻辑状态或可见状态。
-- `PRAGMA mmap_size`：通过 fake file control 记录 advisory value，不实现 mmap。
-- `BtreeSetPagerFlags`：只同步 fake pager 上的 flags，不实现 sync、journal 或 cache spill 行为。
-
-这些 shim 只能用于减少已有测试或上层代码的意外，不应该继续加重。新增时必须说明它没有真实存储语义。
-
-### 容易误导的 shim
-
-- `SQLITE_FCNTL_PERSIST_WAL`：当前只是可见 FileControl 状态，不创建 `-wal` 占位文件，也不代表真实 WAL。
-- `sqlite_dbpage` 逻辑 page 1 header：只避免 dbpage 读路径直接解 fake pager，不代表完整 SQLite page image。
-- read-only VFS snapshot import：当前不是 minweight VFS 支持，而是短暂切回 native btree，把 VFS-backed SQLite page file 序列化成逻辑 snapshot，再 replay 到 minweight，并标记 readonly。
-
-这些 shim 都容易误导用户。文档、测试名和错误信息不能把它们命名成“支持 WAL”、“支持 sqlite_dbpage”或“支持 custom VFS”。更准确的说法是：
-
-- `read-only VFS snapshot import`
-- `logical dbpage header compatibility`
-- `WAL disabled / PERSIST_WAL visible state`
-
-不支持的能力应明确 fail fast：
-
-- writable custom VFS
-- VFS I/O backed minweight store
-- valid WAL frames
-- mmap-backed reads/writes
-- full multi-page or writable `sqlite_dbpage`
-
-总体原则：轻量 ABI 占位可以保留；没有逻辑语义的重型 fake 不做。宁可返回 unsupported，也不要让用户误以为 minweight 已经支持 SQLite pager/VFS/WAL。
-
-## 测试入口
-
-minweight 测试通过环境变量安装 engine：
+推荐快速检查：
 
 ```sh
-SQLITE_TEST_STORAGE_ENGINE=minweight go test ...
+TEST_PARALLEL=8 ./test-minweight.sh quick
 ```
 
-常用脚本：
+storage 语义有明显变化时：
 
 ```sh
-./test-minweight-storage-engine.sh
-./test-minweight-broad.sh
-./test-minweight-full.sh
-TEST_PARALLEL=8 ./test-storage-engine.sh
+TEST_PARALLEL=8 ./test-minweight-storage-engine.sh
 ```
 
-当前新增的高价值覆盖：
+benchmark 工具变化时：
 
-- `ATTACH` 多数据库 rollback、commit、join、`DETACH` 和 attached path 重开。
-- `WITHOUT ROWID` 复合主键的 ordered scan、point lookup、update、delete、隐藏 rowid 拒绝和 `integrity_check`。
-- non-int-key btree overwrite：`WITHOUT ROWID` 更新非主键列时，旧 record key 必须被删除，新 record 作为同一逻辑行覆盖写入，不能变成重复 key。
-- 多连接 committed-view 可见性：writer 未提交的 update/insert 对其它连接不可见，commit 后可见，rollback 后保持不可见。
-- 单 writer 协议：已有 writer 未结束时，第二个 writer 返回 `SQLITE_BUSY`，不能覆盖 active writer 或 direct-write 到 committed store。
-- busy handler：第二个 writer 设置 `PRAGMA busy_timeout` 后，会通过 SQLite busy handler 等待 active writer 释放；超时前释放则写入成功。
-- statement reader 边界：普通 autocommit `SELECT` rows 未关闭时，writer commit 可以成功；open rows 继续读取 pinned old view，看不到 commit 后的 update/insert。显式 read transaction 仍让 writer commit 返回 `SQLITE_BUSY`。
-- path-backed minweight store close/reopen 持久化，且新 engine 进程内状态为空时仍能读取旧数据、schema、index lookup 和 `PRAGMA user_version`。
-- read-only path open fail-fast：`mode=ro` 不再通过 placeholder 冒充支持。
-- sortable index key adapter 单测：覆盖 SQLite storage class 顺序、INTEGER/REAL 数值编码、TEXT/BLOB 分界、`BINARY`/`NOCASE`/`RTRIM`、DESC、versioned store key 解码，以及 unsupported custom collation fail-fast。
-- non-int-key sequential cursor seek：lib 级测试覆盖 versioned index cursor 的 `First`/`Next`/`Last`/`Previous`，并验证 writer overlay 的插入/删除会被 seek 路径正确合并，cursor 不 materialize 整个 root。
-- versioned `BtreeIndexMoveto` probe seek：lib 级测试覆盖 `UnpackedRecord` prefix seek、`default_rc` skip-prefix 行为、完整 key equality、DESC index、writer overlay merge、delete 覆盖，以及 cursor 不 materialize 整个 root。
+```sh
+go test ./tools/minweight_oltp_bench
+golangci-lint run --new-from-rev HEAD ./tools/minweight_oltp_bench
+```
 
-当前应优先补高价值语义测试：
-
-- writer overlay 未提交不可见
-- commit phase two 后新 reader 可见
-- autocommit reader cursor 活跃时 writer commit 成功且 reader 继续旧 view；显式 read transaction 活跃时 writer commit 返回 busy
-- rollback / savepoint / statement rollback 只回滚本事务写集
-- index ordering/lookup/collation
-- backup/restore/serialize round-trip
-- constraints、triggers、incremental blob
-
-低价值 shim 测试，例如只验证 no-op PRAGMA 可见状态，应放在较低优先级。
-
-## 当前结论
-
-目前已经完成的是：SQLite btree API 可以 dispatch 到 minweight，handle 绑定不再依赖进程级全局开关，path-backed database 会真实打开 minweight_store 目录并在最后一个 handle 关闭时 `Store.Close()`，逻辑 metadata 也会随 store 持久化；competing writer 会返回 `SQLITE_BUSY`，busy handler 可等待 active writer 释放；ordinary open statement reader 会 pin old view 而不阻塞 writer commit，显式 read transaction 仍会阻塞 writer commit；index/WITHOUT ROWID 新写入已经使用 versioned `sqliteComparableKey` 物理 key，value 保留原始 SQLite record；non-int-key sequential cursor movement 和 versioned-root `BtreeIndexMoveto` 已经用 seek/range API。
-
-目前没有完成的是：完整 SQL 生命周期级 generation pin（尤其显式事务和少数剩余 read path）、完整 reader/writer lock protocol、剩余 root-scoped copy 流程的 range/batch 维护、物理 page file、真实 WAL、mmap、writable VFS，以及完整 `sqlite_dbpage` 页面模型。
-
-下一步如果目标是“行为对齐 btree”，第一优先级继续是 optimistic transaction view 的 SQL 层冲突传播和剩余读路径：versioned 新写入路径已经能 seek，raw key 旧格式已经 fail fast，正常 cursor movement 已经没有 `loadRows()` / `refreshCursorRows()`，`Get`、table/versioned-index range seek、metadata state 已经能按 pinned/base generation 重建旧视图，ordinary read cursor 已经 pin/release generation，`BtreeIntegrityCheck` 已经不再复制整库 snapshot，`BtreeCopyFile` 已经用 batch/overlay 替代 snapshot/restore，剩下要把 stale writer conflict 的 SQL 层 `SQLITE_BUSY_SNAPSHOT` 覆盖和少数 transaction-start read path 收完。
+需要刷新 benchmark 数字时看 `MINWEIGHT_OLTP_BENCHMARK.md`。10GB benchmark 不作为每轮常规测试，只在 read/write path 有实质变化或需要刷新报告时跑。
