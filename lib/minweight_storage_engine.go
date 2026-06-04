@@ -173,10 +173,15 @@ type minweightTxn struct {
 	baseGeneration uint64
 	state          minweightDBState
 	reads          map[string]struct{}
-	readRoots      map[uint32]struct{}
+	readRanges     []minweightReadRange
 	readMeta       bool
 	writes         map[string]minweightTxnWrite
 	savepoints     []minweightTxnSavepoint
+}
+
+type minweightReadRange struct {
+	lower []byte
+	upper []byte
 }
 
 type minweightTxnWrite struct {
@@ -825,6 +830,16 @@ func minweightIndexSeekAfterPrefix(key []byte) []byte {
 	return append(next, 0xff)
 }
 
+func minweightIndexReadUpper(target []byte, rootUpper []byte, strict bool) []byte {
+	if bytes.Compare(target, rootUpper) >= 0 {
+		return rootUpper
+	}
+	if strict {
+		return append([]byte(nil), target...)
+	}
+	return minweightIndexSeekAfter(target)
+}
+
 func minweightDecodeRow(item minweight.Item, intKey bool) minweightRow {
 	row := minweightRow{
 		storeKey: append([]byte(nil), item.Key...),
@@ -1396,7 +1411,7 @@ func (bt *minweightBtree) newTxnLocked() *minweightTxn {
 		baseGeneration: bt.generation,
 		state:          bt.stateLocked(),
 		reads:          map[string]struct{}{},
-		readRoots:      map[uint32]struct{}{},
+		readRanges:     []minweightReadRange{},
 		readMeta:       true,
 		writes:         map[string]minweightTxnWrite{},
 	}
@@ -1484,10 +1499,13 @@ func (bt *minweightBtree) get(key []byte) ([]byte, bool, error) {
 	return value, ok, nil
 }
 
-func (bt *minweightBtree) noteRootRead(root uint32) {
+func (bt *minweightBtree) noteRangeRead(lower []byte, upper []byte) {
 	bt.mu.Lock()
 	if tx := bt.activeTxnLocked(); tx != nil {
-		tx.readRoots[root] = struct{}{}
+		tx.readRanges = append(tx.readRanges, minweightReadRange{
+			lower: append([]byte(nil), lower...),
+			upper: append([]byte(nil), upper...),
+		})
 	}
 	bt.mu.Unlock()
 }
@@ -1780,13 +1798,13 @@ func minweightBetterTableLERow(a minweightRow, aOK bool, b minweightRow, bOK boo
 }
 
 func (bt *minweightBtree) seekIndexGE(root uint32, target []byte, strict bool) (minweightRow, bool, error) {
-	bt.noteRootRead(root)
 	overlayRow, overlayOK := bt.indexOverlayCandidate(root, target, true, strict)
 	seekKey := append([]byte(nil), target...)
 	if strict {
 		seekKey = minweightIndexSeekAfter(seekKey)
 	}
 	upper := minweightVersionedIndexUpper(root)
+	bt.noteRangeRead(seekKey, upper)
 	for {
 		item, ok, err := bt.store.SeekGE(seekKey)
 		if err != nil {
@@ -1812,9 +1830,10 @@ func (bt *minweightBtree) seekIndexGE(root uint32, target []byte, strict bool) (
 }
 
 func (bt *minweightBtree) seekIndexLE(root uint32, target []byte, strict bool) (minweightRow, bool, error) {
-	bt.noteRootRead(root)
 	overlayRow, overlayOK := bt.indexOverlayCandidate(root, target, false, strict)
 	lower := minweightVersionedIndexLower(root)
+	upper := minweightIndexReadUpper(target, minweightVersionedIndexUpper(root), strict)
+	bt.noteRangeRead(lower, upper)
 	var baseRow minweightRow
 	baseOK := false
 	var scanErr error
@@ -1851,9 +1870,9 @@ func (bt *minweightBtree) seekIndexLE(root uint32, target []byte, strict bool) (
 }
 
 func (bt *minweightBtree) seekTableGE(root uint32, target int64) (minweightRow, bool, error) {
-	bt.noteRootRead(root)
 	overlayRow, overlayOK := bt.tableOverlayCandidate(root, target, true)
 	seekKey := minweightTableKey(root, target)
+	bt.noteRangeRead(seekKey, minweightPrefixUpper(minweightRootPrefix(root, true)))
 	for {
 		item, ok, err := bt.store.SeekGE(seekKey)
 		if err != nil {
@@ -1883,9 +1902,9 @@ func (bt *minweightBtree) seekTableGE(root uint32, target int64) (minweightRow, 
 }
 
 func (bt *minweightBtree) seekTableLE(root uint32, target int64) (minweightRow, bool, error) {
-	bt.noteRootRead(root)
 	overlayRow, overlayOK := bt.tableOverlayCandidate(root, target, false)
 	seekKey := minweightTableKey(root, target)
+	bt.noteRangeRead(minweightRootPrefix(root, true), minweightIndexSeekAfter(seekKey))
 	for {
 		item, ok, err := bt.store.SeekLE(seekKey)
 		if err != nil {
@@ -2380,9 +2399,11 @@ func (db *minweightDatabase) txnReadConflictLocked(tx *minweightTxn, stateChange
 				return true
 			}
 		}
-		for root := range tx.readRoots {
-			if _, ok := change.roots[root]; ok {
-				return true
+		for _, readRange := range tx.readRanges {
+			for _, keyChange := range change.keys {
+				if minweightKeyInRange(keyChange.key, readRange.lower, readRange.upper) {
+					return true
+				}
 			}
 		}
 	}

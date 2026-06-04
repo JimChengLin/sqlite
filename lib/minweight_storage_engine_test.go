@@ -714,13 +714,15 @@ func TestMinweightCommitDetectsRangeReadConflict(t *testing.T) {
 	if rc, _ := h.bt.beginTrans(h.ctx, 1); rc != SQLITE_OK {
 		t.Fatalf("beginTrans rc = %d, want SQLITE_OK", rc)
 	}
-	if _, ok, err := h.bt.seekTableGE(1, 1); err != nil || ok {
+	if _, ok, err := h.bt.seekTableGE(1, 50); err != nil || ok {
 		t.Fatalf("empty range seek ok=%v err=%v, want no row", ok, err)
 	}
+	changedKey := minweightTableKey(1, 60)
 	h.bt.changes = append(h.bt.changes, minweightCommitChange{
 		generation: 2,
-		keys:       map[string]minweightCommittedKeyChange{},
-		roots:      map[uint32]struct{}{1: {}},
+		keys: map[string]minweightCommittedKeyChange{
+			string(changedKey): {key: changedKey},
+		},
 	})
 	h.bt.generation = 2
 	if err := h.bt.put(minweightTableKey(1, 10), []byte("own")); err != nil {
@@ -740,22 +742,24 @@ func TestMinweightCommitIgnoresUnrelatedRangeChange(t *testing.T) {
 	if rc, _ := h.bt.beginTrans(h.ctx, 1); rc != SQLITE_OK {
 		t.Fatalf("beginTrans rc = %d, want SQLITE_OK", rc)
 	}
-	if _, ok, err := h.bt.seekTableGE(1, 1); err != nil || ok {
+	if _, ok, err := h.bt.seekTableGE(1, 50); err != nil || ok {
 		t.Fatalf("empty range seek ok=%v err=%v, want no row", ok, err)
 	}
+	changedKey := minweightTableKey(1, 10)
 	h.bt.changes = append(h.bt.changes, minweightCommitChange{
 		generation: 2,
-		keys:       map[string]minweightCommittedKeyChange{},
-		roots:      map[uint32]struct{}{2: {}},
+		keys: map[string]minweightCommittedKeyChange{
+			string(changedKey): {key: changedKey},
+		},
 	})
 	h.bt.generation = 2
-	if err := h.bt.put(minweightTableKey(1, 10), []byte("own")); err != nil {
+	if err := h.bt.put(minweightTableKey(1, 100), []byte("own")); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.bt.commitActiveWriteTxn(); err != nil {
 		t.Fatalf("commit with unrelated root change: %v", err)
 	}
-	value, ok, err := h.bt.store.Get(minweightTableKey(1, 10))
+	value, ok, err := h.bt.store.Get(minweightTableKey(1, 100))
 	if err != nil || !ok || !bytes.Equal(value, []byte("own")) {
 		t.Fatalf("committed value ok=%v value=%q err=%v, want own", ok, value, err)
 	}
