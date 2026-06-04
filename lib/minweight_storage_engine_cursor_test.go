@@ -105,7 +105,7 @@ func TestMinweightIndexCursorRestoreSeeksAfterDeletedRow(t *testing.T) {
 	h.assertIndexCursorRecord(t, cursor, recordB)
 }
 
-func TestMinweightIndexNextFromMaterializedStaleCursorUsesSeek(t *testing.T) {
+func TestMinweightIndexNextFromLastRowUsesSeek(t *testing.T) {
 	h := newMinweightBtreeTestHarness(t)
 	root := uint32(2)
 	h.bt.tables[root] = minweightTable{intKey: false}
@@ -113,36 +113,22 @@ func TestMinweightIndexNextFromMaterializedStaleCursorUsesSeek(t *testing.T) {
 	recordA := minweightTestRecord(minweightTestTextRecord("a"))
 	recordB := minweightTestRecord(minweightTestTextRecord("b"))
 	recordC := minweightTestRecord(minweightTestTextRecord("c"))
-	keyA := h.putIndexRecord(t, root, keyInfo, recordA)
-	keyB := h.putIndexRecord(t, root, keyInfo, recordB)
-	keyC, err := minweightIndexStoreKey(h.ctx, keyInfo, root, recordC)
-	if err != nil {
-		t.Fatal(err)
-	}
+	h.putIndexRecord(t, root, keyInfo, recordA)
+	h.putIndexRecord(t, root, keyInfo, recordB)
 	cursor := h.indexCursor(t, root, keyInfo)
-	cur := h.engine.cursor(cursor)
-	cur.rows = []minweightRow{
-		{key: recordA, storeKey: keyA, payload: recordA},
-		{key: recordB, storeKey: keyB, payload: recordB},
+	var result int32
+	if rc := h.engine.BtreeLast(h.ctx, cursor, BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&result))}); rc != SQLITE_OK {
+		t.Fatalf("BtreeLast rc = %d, want SQLITE_OK", rc)
 	}
-	cur.dataVer = h.bt.visibleDataVer()
-	if len(cur.rows) != 2 {
-		t.Fatalf("materialized rows = %d, want 2", len(cur.rows))
+	if result != 0 {
+		t.Fatalf("BtreeLast result = %d, want 0", result)
 	}
-	cur.valid = true
-	cur.index = 0
-	h.assertIndexCursorRecord(t, cursor, recordA)
+	h.assertIndexCursorRecord(t, cursor, recordB)
 
-	if _, err := h.bt.store.Delete(keyA); err != nil {
-		t.Fatal(err)
+	if rc := h.engine.BtreeNext(h.ctx, cursor, 0); rc != SQLITE_DONE {
+		t.Fatalf("BtreeNext at end rc = %d, want SQLITE_DONE", rc)
 	}
-	if _, err := h.bt.store.Delete(keyB); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.bt.store.Put(keyC, recordC); err != nil {
-		t.Fatal(err)
-	}
-	h.bt.bumpDataVer()
+	h.putIndexRecord(t, root, keyInfo, recordC)
 
 	if rc := h.engine.BtreeNext(h.ctx, cursor, 0); rc != SQLITE_OK {
 		t.Fatalf("BtreeNext rc = %d, want SQLITE_OK", rc)
@@ -150,7 +136,7 @@ func TestMinweightIndexNextFromMaterializedStaleCursorUsesSeek(t *testing.T) {
 	h.assertIndexCursorRecord(t, cursor, recordC)
 }
 
-func TestMinweightIndexPreviousFromMaterializedStaleCursorUsesSeek(t *testing.T) {
+func TestMinweightIndexPreviousFromLastRowUsesSeek(t *testing.T) {
 	h := newMinweightBtreeTestHarness(t)
 	root := uint32(2)
 	h.bt.tables[root] = minweightTable{intKey: false}
@@ -158,123 +144,27 @@ func TestMinweightIndexPreviousFromMaterializedStaleCursorUsesSeek(t *testing.T)
 	recordA := minweightTestRecord(minweightTestTextRecord("a"))
 	recordB := minweightTestRecord(minweightTestTextRecord("b"))
 	recordBefore := minweightTestRecord(minweightTestTextRecord("0"))
-	keyA := h.putIndexRecord(t, root, keyInfo, recordA)
-	keyB := h.putIndexRecord(t, root, keyInfo, recordB)
-	keyBefore, err := minweightIndexStoreKey(h.ctx, keyInfo, root, recordBefore)
-	if err != nil {
-		t.Fatal(err)
-	}
+	h.putIndexRecord(t, root, keyInfo, recordA)
+	h.putIndexRecord(t, root, keyInfo, recordB)
 	cursor := h.indexCursor(t, root, keyInfo)
-	cur := h.engine.cursor(cursor)
-	cur.rows = []minweightRow{
-		{key: recordA, storeKey: keyA, payload: recordA},
-		{key: recordB, storeKey: keyB, payload: recordB},
+	var result int32
+	if rc := h.engine.BtreeFirst(h.ctx, cursor, BtreeMemoryHandle{tls: h.tls, ptr: uintptr(unsafe.Pointer(&result))}); rc != SQLITE_OK {
+		t.Fatalf("BtreeFirst rc = %d, want SQLITE_OK", rc)
 	}
-	cur.dataVer = h.bt.visibleDataVer()
-	if len(cur.rows) != 2 {
-		t.Fatalf("materialized rows = %d, want 2", len(cur.rows))
+	if result != 0 {
+		t.Fatalf("BtreeFirst result = %d, want 0", result)
 	}
-	cur.valid = true
-	cur.index = 1
-	h.assertIndexCursorRecord(t, cursor, recordB)
+	h.assertIndexCursorRecord(t, cursor, recordA)
 
-	if _, err := h.bt.store.Delete(keyA); err != nil {
-		t.Fatal(err)
+	if rc := h.engine.BtreePrevious(h.ctx, cursor, 0); rc != SQLITE_DONE {
+		t.Fatalf("BtreePrevious at beginning rc = %d, want SQLITE_DONE", rc)
 	}
-	if _, err := h.bt.store.Delete(keyB); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.bt.store.Put(keyBefore, recordBefore); err != nil {
-		t.Fatal(err)
-	}
-	h.bt.bumpDataVer()
+	h.putIndexRecord(t, root, keyInfo, recordBefore)
 
 	if rc := h.engine.BtreePrevious(h.ctx, cursor, 0); rc != SQLITE_OK {
 		t.Fatalf("BtreePrevious rc = %d, want SQLITE_OK", rc)
 	}
 	h.assertIndexCursorRecord(t, cursor, recordBefore)
-}
-
-func TestMinweightIndexNextFromStaleOldIndexUsesSeek(t *testing.T) {
-	h := newMinweightBtreeTestHarness(t)
-	root := uint32(2)
-	h.bt.tables[root] = minweightTable{intKey: false}
-	keyInfo := minweightTestKeyInfo(t, h.tls, []string{"BINARY"}, nil)
-	recordA := minweightTestRecord(minweightTestTextRecord("a"))
-	recordB := minweightTestRecord(minweightTestTextRecord("b"))
-	recordC := minweightTestRecord(minweightTestTextRecord("c"))
-	keyA := h.putIndexRecord(t, root, keyInfo, recordA)
-	keyB := h.putIndexRecord(t, root, keyInfo, recordB)
-	keyC, err := minweightIndexStoreKey(h.ctx, keyInfo, root, recordC)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cursor := h.indexCursor(t, root, keyInfo)
-	cur := h.engine.cursor(cursor)
-	cur.rows = []minweightRow{
-		{key: recordA, storeKey: keyA, payload: recordA},
-		{key: recordB, storeKey: keyB, payload: recordB},
-	}
-	cur.dataVer = h.bt.visibleDataVer()
-	cur.valid = false
-	cur.index = len(cur.rows)
-
-	if _, err := h.bt.store.Delete(keyA); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.bt.store.Delete(keyB); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.bt.store.Put(keyC, recordC); err != nil {
-		t.Fatal(err)
-	}
-	h.bt.bumpDataVer()
-
-	if rc := h.engine.BtreeNext(h.ctx, cursor, 0); rc != SQLITE_OK {
-		t.Fatalf("BtreeNext rc = %d, want SQLITE_OK", rc)
-	}
-	h.assertIndexCursorRecord(t, cursor, recordC)
-}
-
-func TestMinweightIndexEofFromStaleOldIndexUsesSeek(t *testing.T) {
-	h := newMinweightBtreeTestHarness(t)
-	root := uint32(2)
-	h.bt.tables[root] = minweightTable{intKey: false}
-	keyInfo := minweightTestKeyInfo(t, h.tls, []string{"BINARY"}, nil)
-	recordA := minweightTestRecord(minweightTestTextRecord("a"))
-	recordB := minweightTestRecord(minweightTestTextRecord("b"))
-	recordC := minweightTestRecord(minweightTestTextRecord("c"))
-	keyA := h.putIndexRecord(t, root, keyInfo, recordA)
-	keyB := h.putIndexRecord(t, root, keyInfo, recordB)
-	keyC, err := minweightIndexStoreKey(h.ctx, keyInfo, root, recordC)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cursor := h.indexCursor(t, root, keyInfo)
-	cur := h.engine.cursor(cursor)
-	cur.rows = []minweightRow{
-		{key: recordA, storeKey: keyA, payload: recordA},
-		{key: recordB, storeKey: keyB, payload: recordB},
-	}
-	cur.dataVer = h.bt.visibleDataVer()
-	cur.valid = false
-	cur.index = len(cur.rows)
-
-	if _, err := h.bt.store.Delete(keyA); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.bt.store.Delete(keyB); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.bt.store.Put(keyC, recordC); err != nil {
-		t.Fatal(err)
-	}
-	h.bt.bumpDataVer()
-
-	if got := h.engine.BtreeEof(h.ctx, cursor); got != 0 {
-		t.Fatalf("BtreeEof = %d, want 0", got)
-	}
-	h.assertIndexCursorRecord(t, cursor, recordC)
 }
 
 func TestMinweightIndexNextWithoutVersionedStoreKeyFailsFast(t *testing.T) {
@@ -285,9 +175,8 @@ func TestMinweightIndexNextWithoutVersionedStoreKeyFailsFast(t *testing.T) {
 	record := minweightTestRecord(minweightTestTextRecord("a"))
 	cursor := h.indexCursor(t, root, keyInfo)
 	cur := h.engine.cursor(cursor)
-	cur.rows = []minweightRow{{key: record, payload: record}}
+	cur.row = minweightRow{key: record, payload: record}
 	cur.valid = true
-	cur.index = 0
 
 	if rc := h.engine.BtreeNext(h.ctx, cursor, 0); rc != SQLITE_CORRUPT {
 		t.Fatalf("BtreeNext rc = %d, want SQLITE_CORRUPT", rc)

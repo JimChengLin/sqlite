@@ -487,16 +487,10 @@ func TestMinweightIndexCursorSeekMergesOverlay(t *testing.T) {
 		t.Fatalf("BtreeFirst res = %d, want 0", res)
 	}
 	f.h.assertIndexCursorRecord(t, cursor, f.recordA)
-	if got := len(f.h.engine.cursor(cursor).rows); got != 1 {
-		t.Fatalf("cursor rows after seek first = %d, want 1", got)
-	}
 	if rc := f.h.engine.BtreeNext(f.h.ctx, cursor, 0); rc != SQLITE_OK {
 		t.Fatalf("BtreeNext rc = %d, want SQLITE_OK", rc)
 	}
 	f.h.assertIndexCursorRecord(t, cursor, f.recordB)
-	if got := len(f.h.engine.cursor(cursor).rows); got != 1 {
-		t.Fatalf("cursor rows after seek next = %d, want 1", got)
-	}
 	if rc := f.h.engine.BtreeNext(f.h.ctx, cursor, 0); rc != SQLITE_DONE {
 		t.Fatalf("BtreeNext rc = %d, want SQLITE_DONE", rc)
 	}
@@ -532,9 +526,6 @@ func minweightAssertIndexMovetoFound(t *testing.T, h *minweightBtreeTestHarness,
 	t.Helper()
 	res, rec := minweightIndexMovetoProbe(t, h, cursor, keyInfo, defaultRC, values...)
 	h.assertIndexCursorRecord(t, cursor, record)
-	if got := len(h.engine.cursor(cursor).rows); got != 1 {
-		t.Fatalf("cursor rows after index moveto = %d, want 1", got)
-	}
 	return res, rec
 }
 
@@ -594,9 +585,6 @@ func TestMinweightIndexMovetoUsesDescProbeSeek(t *testing.T) {
 		t.Fatalf("BtreeIndexMoveto DESC prefix rc = %d, want SQLITE_OK", rc)
 	}
 	h.assertIndexCursorRecord(t, cursor, recordB)
-	if got := len(h.engine.cursor(cursor).rows); got != 1 {
-		t.Fatalf("cursor rows after DESC index moveto = %d, want 1", got)
-	}
 	if res <= 0 {
 		t.Fatalf("DESC moveto prefix res = %d, want positive default_rc compare", res)
 	}
