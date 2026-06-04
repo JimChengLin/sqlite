@@ -100,6 +100,7 @@ Last updated: 2026-06-04.
 - Removed minweight `-wal` placeholder creation from write transactions. `PRAGMA journal_mode=WAL` now stays in rollback `delete` mode for minweight and direct coverage verifies that no `-wal` file is created; `SQLITE_FCNTL_PERSIST_WAL` remains only a visible FileControl state until real WAL semantics exist.
 - Cleaned the changed `./lib` lint surface. `golangci-lint run ./lib --timeout 5m` and `golangci-lint run ./lib --enable-only=gocyclo,funlen --new --timeout 5m` are the routine gates for this branch. A full historical `gocyclo,funlen` run still reports historical long/complex minweight functions and old tests; track those as planned refactors instead of re-running them after every narrow edit.
 - File size is not covered by the current golangci-lint gates. Keep `lib/minweight_storage_engine.go` on the explicit refactor list and split it by ownership boundary instead of assuming lint will catch it.
+- Preserved `sqlite_sequence` data through minweight logical `Serialize`/`Deserialize` and logical `Backup`. AUTOINCREMENT tables with no current rows now keep their advanced sequence value, so the next inserted rowid continues after the source sequence instead of restarting from 1.
 
 ## Focused Test Policy
 
@@ -108,12 +109,14 @@ Default script concurrency is 8. Override with `TEST_PARALLEL=N` only when the m
 Default per-turn minweight quick gate, target under 30s:
 
 ```sh
-./test-minweight-quick.sh
+./test-minweight.sh quick
 ```
 
-Latest quick run: 6.62s on 2026-06-04 with `TEST_PARALLEL=8`.
+Latest quick run: 6.07s on 2026-06-04 with `TEST_PARALLEL=8`.
 
-The quick gate intentionally covers high-value storage semantics only: path-backed minweight persistence, rollback overlay behavior, `WITHOUT ROWID`/sortable index seek behavior, short reader pinned views, WAL fail-fast behavior, handle-bound dispatch after global engine switching, direct optimistic read-set/range conflict checks, and the no-legacy-raw-index-key path. Keep low-priority shim checks such as `sqlite_dbpage`, cache/mmap visible state, and custom-VFS snapshot import out of this default list.
+The quick gate intentionally covers high-value storage semantics only: path-backed minweight persistence, rollback overlay behavior, `WITHOUT ROWID`/sortable index seek behavior, short reader pinned views, WAL fail-fast behavior, logical AUTOINCREMENT sequence preservation, handle-bound dispatch after global engine switching, direct optimistic read-set/range conflict checks, and the no-legacy-raw-index-key path. Keep low-priority shim checks such as `sqlite_dbpage`, cache/mmap visible state, and custom-VFS snapshot import out of this default list.
+
+The old `./test-minweight-quick.sh`, `./test-minweight-broad.sh`, and `./test-minweight-full.sh` entry points are thin wrappers around `./test-minweight.sh quick|broad|full`.
 
 Focused minweight integration check, run before commits that touch storage semantics when the quick gate is not enough:
 
@@ -132,7 +135,7 @@ It also excludes native SQLite file-open/read-only tests such as `TestIssue97`, 
 Reduced-frequency broad top-level minweight check without context-expiration stress tests and native physical-file/VFS tests:
 
 ```sh
-./test-minweight-broad.sh
+./test-minweight.sh broad
 ```
 
 Latest broad run: 493.597s on 2026-06-04 with `TEST_PARALLEL=8`. It skips `TestRegisteredFunctions/QueryContext_with_context_expiring`, `TestRegisteredFunctions/ExecContext_with_context_expiring`, `TestIssue97`, `TestOpenV2FailureErrorMessage`, `TestVFS`, and `TestIsReadOnly`. Run this after broad engine behavior changes or before larger milestones when the full context stress coverage and native physical-file/VFS behavior are not the point; do not run it after narrow edits.
@@ -140,7 +143,7 @@ Latest broad run: 493.597s on 2026-06-04 with `TEST_PARALLEL=8`. It skips `TestR
 Full top-level minweight check, run after broad engine semantics changes, context-interrupt changes, or before larger milestones:
 
 ```sh
-./test-minweight-full.sh
+./test-minweight.sh full
 ```
 
 Latest completed full run before the physical-file skip split: 494.331s on 2026-06-04 with `-p 8 -parallel 8`. A later full attempt on 2026-06-04 was stopped after the quick-gate policy change; do not restart it unless the change specifically needs context-interrupt or milestone coverage.
@@ -162,7 +165,7 @@ The default lib compile matrix is intentionally only `darwin/arm64` and `linux/a
 ## Slow Or Reduced-Frequency Tests
 
 - `./test-minweight-storage-engine.sh`: focused integration script. Use it before commits that touch storage semantics or when quick-gate coverage is too narrow, but not after every tiny edit.
-- `./test-minweight-broad.sh`: currently about 8m14s on darwin/arm64 even with context-expiration and native physical-file/VFS skips. Latest broad run: 493.597s on 2026-06-04 with `TEST_PARALLEL=8`. Run after broad engine behavior changes or before larger milestones, not as routine feedback.
+- `./test-minweight.sh broad`: currently about 8m14s on darwin/arm64 even with context-expiration and native physical-file/VFS skips. Latest broad run: 493.597s on 2026-06-04 with `TEST_PARALLEL=8`. Run after broad engine behavior changes or before larger milestones, not as routine feedback.
 - `TestRegisteredFunctions/QueryContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Verified under minweight on 2026-06-03; keep it out of the focused script and run it only when specifically checking interrupt behavior.
 - `TestRegisteredFunctions/ExecContext_with_context_expiring`: native interrupt stress, about 200s worst-case by construction. Verified under minweight on 2026-06-03; keep it out of the focused script and run it only when specifically checking interrupt behavior.
 - `TestIssue53`: passes under minweight; latest targeted run after index seek changes was 3.145s on 2026-06-04. Keep it out of the focused script; run it in full minweight checks or when index seek/order code changes.
@@ -170,7 +173,7 @@ The default lib compile matrix is intentionally only `darwin/arm64` and `linux/a
 - Native SQLite page-file open/read-only behavior tests (`TestIssue97`, `TestIsReadOnly`, `TestOpenV2FailureErrorMessage`): keep them out of focused and broad minweight scripts. Minweight path-backed databases are directories opened with `minweight.Open`, and `mode=ro` is covered by `TestMinweightStorageEngineReadOnlyPathOpenFailsFast` until real minweight read-only open exists.
 - `TestVFS`: keep it out of focused and broad minweight scripts. Minweight does not implement VFS I/O; the current VFS path is only read-only logical snapshot import coverage, not writable/native VFS support.
 - Native SQLite WAL file lifecycle tests (`TestFcntlPersistWAL`): skip under minweight because minweight does not implement SQLite WAL files. Minweight coverage is `TestMinweightStorageEngineJournalModeWALStaysRollback`, which verifies `PRAGMA journal_mode=WAL` remains `delete` and no `-wal` placeholder is created.
-- Full `./test-minweight-full.sh`: currently about 8m15s on darwin/arm64 because it includes the two expiring-context stress tests. Latest completed full run before the physical-file skip split: 494.331s on 2026-06-04 with `-p 8 -parallel 8`; a later attempt on 2026-06-04 was stopped after adopting the quick-gate policy. Run after context-interrupt changes, broad engine changes, or before larger milestones, not after every narrow commit.
+- Full `./test-minweight.sh full`: currently about 8m15s on darwin/arm64 because it includes the two expiring-context stress tests. Latest completed full run before the physical-file skip split: 494.331s on 2026-06-04 with `-p 8 -parallel 8`; a later attempt on 2026-06-04 was stopped after adopting the quick-gate policy. Run after context-interrupt changes, broad engine changes, or before larger milestones, not after every narrow commit.
 - `STORAGE_ENGINE_MATRIX=full ./test-storage-engine.sh`: full cross-target lib test-binary compilation matrix. Run when storage-engine ABI signatures or generated-code wrappers change broadly, not after every commit. The default script already covers the high-signal `darwin/arm64` and `linux/amd64` targets.
 - Full historical `golangci-lint run ./lib --enable-only=gocyclo,funlen --timeout 5m`: useful when specifically splitting old debt, but not a routine gate yet. Current new-code gate is `--new`; known old debt includes large minweight btree entrypoints such as insert/delete and historical test helpers.
 
@@ -189,7 +192,7 @@ The default lib compile matrix is intentionally only `darwin/arm64` and `linux/a
 - P0: keep WAL disabled/fail-fast until stable generation-pinned read views exist. The adapter no longer advertises pager WAL support and no longer creates `-wal` placeholders; `SQLITE_FCNTL_PERSIST_WAL` remains a low-priority visible-state shim, not WAL support.
 - P0: continue removing metadata races around read-view lifetime. Writer metadata now uses a working copy, commit publishes it with the overlay, and generation-pinned readers reconstruct old metadata from retained states; explicit transaction view lifetime still needs a clearer fail-fast/lock boundary before WAL-like concurrency can be claimed.
 - P1: multi-database `ATTACH` commit is still logical best-effort, not crash-atomic master-journal semantics. Treat it as SQL-level coverage only until a cross-database commit protocol exists.
-- P1: logical backup/serialize remain SQL replay/logical snapshot features, not SQLite page-image backup. Keep virtual tables, shadow tables, generated/hidden columns, stats tables, and backup progress semantics on the risk list.
+- P1: logical backup/serialize remain SQL replay/logical snapshot features, not SQLite page-image backup. `sqlite_sequence` is now preserved for AUTOINCREMENT semantics; keep virtual tables, shadow tables, generated/hidden columns, stats tables, and backup progress semantics on the risk list.
 - P1: continue replacing root/store maintenance fallbacks. `clearRoot`/`moveRoot` now use seek iteration for int-key and versioned non-int-key roots; `BtreeIntegrityCheck` now uses streaming full scans or selected-root range scans instead of whole-store snapshots; `BtreeCopyFile` now uses streaming batch/overlay copy, but still scans source and target because the operation replaces a whole btree.
 - P1: refine minweight error-code mapping and remove panic paths for unknown btree/cursor handles from user-facing ABI error paths.
 - P1: keep splitting historical large/complex minweight functions and tests. New/changed code must stay clean under `golangci-lint --new --enable-only=gocyclo,funlen`; full historical cleanup can continue in smaller commits instead of hiding semantic changes inside a giant mechanical refactor.

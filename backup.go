@@ -216,15 +216,11 @@ func (b *logicalBackup) PageCount() int {
 
 func logicalBackupPageCount(src *conn) (int, error) {
 	count := 2
-	tables, err := logicalBackupQuery(src, "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY rowid")
+	tables, err := logicalDataTableNames(src)
 	if err != nil {
 		return 0, err
 	}
-	for _, table := range tables {
-		name, ok := table[0].(string)
-		if !ok {
-			return 0, fmt.Errorf("sqlite: backup table name is %T", table[0])
-		}
+	for _, name := range tables {
 		rows, err := logicalBackupQuery(src, "SELECT COUNT(*) FROM "+quoteIdent(name))
 		if err != nil {
 			return 0, err
@@ -331,15 +327,11 @@ func logicalBackupCreateSchema(src *conn, dst *conn) error {
 }
 
 func logicalBackupCopyRows(src *conn, dst *conn) error {
-	tables, err := logicalBackupQuery(src, "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY rowid")
+	tables, err := logicalDataTableNames(src)
 	if err != nil {
 		return err
 	}
-	for _, table := range tables {
-		name, ok := table[0].(string)
-		if !ok {
-			return fmt.Errorf("sqlite: backup table name is %T", table[0])
-		}
+	for _, name := range tables {
 		if err := logicalBackupCopyTable(src, dst, name); err != nil {
 			return err
 		}
@@ -348,18 +340,20 @@ func logicalBackupCopyRows(src *conn, dst *conn) error {
 }
 
 func logicalBackupEnsureTables(src *conn, dst *conn) error {
-	tables, err := logicalBackupQuery(src, "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY rowid")
+	tables, err := logicalDataTableNames(src)
 	if err != nil {
 		return err
 	}
-	for _, table := range tables {
-		name, ok := table[0].(string)
-		if !ok {
-			return fmt.Errorf("sqlite: backup table name is %T", table[0])
-		}
+	for _, name := range tables {
 		exists, err := logicalBackupTableExists(dst, name)
 		if err != nil {
 			return err
+		}
+		if name == logicalSQLiteSequenceTable {
+			if !exists {
+				return fmt.Errorf("sqlite: backup destination missing %s", logicalSQLiteSequenceTable)
+			}
+			continue
 		}
 		if exists {
 			continue
@@ -456,6 +450,9 @@ func logicalBackupSynthCreateTable(src *conn, table string) (string, error) {
 }
 
 func logicalBackupCopyTable(src *conn, dst *conn, table string) error {
+	if table == logicalSQLiteSequenceTable {
+		return logicalBackupCopySQLiteSequence(src, dst)
+	}
 	r, err := src.query(context.Background(), "SELECT * FROM "+quoteIdent(table), nil)
 	if err != nil {
 		return err
@@ -479,6 +476,37 @@ func logicalBackupCopyTable(src *conn, dst *conn, table string) error {
 			args[i] = driver.NamedValue{Ordinal: i + 1, Value: value}
 		}
 		if _, err := dst.exec(context.Background(), insert, args); err != nil {
+			return err
+		}
+	}
+}
+
+func logicalBackupCopySQLiteSequence(src *conn, dst *conn) (err error) {
+	if err := logicalBackupExec(dst, "DELETE FROM sqlite_sequence"); err != nil {
+		return err
+	}
+	r, err := src.query(context.Background(), "SELECT name, seq FROM sqlite_sequence ORDER BY name", nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := r.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	values := make([]driver.Value, len(r.Columns()))
+	for {
+		if err := r.Next(values); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		args := []driver.NamedValue{
+			{Ordinal: 1, Value: values[0]},
+			{Ordinal: 2, Value: values[1]},
+		}
+		if _, err := dst.exec(context.Background(), "INSERT INTO sqlite_sequence(name, seq) VALUES (?, ?)", args); err != nil {
 			return err
 		}
 	}

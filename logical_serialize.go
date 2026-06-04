@@ -19,6 +19,7 @@ import (
 )
 
 const logicalSerializeMagic = "modernc.org/sqlite logical serialize v1\n"
+const logicalSQLiteSequenceTable = "sqlite_sequence"
 
 type logicalSerializedDatabase struct {
 	Settings *logicalSerializedSettings     `json:"settings,omitempty"`
@@ -80,11 +81,12 @@ func logicalSerialize(c *conn) ([]byte, error) {
 		return nil, err
 	}
 	db.Schema = schema
-	for _, object := range schema {
-		if object.Type != "table" {
-			continue
-		}
-		table, err := logicalSerializeTable(c, object.Name)
+	tables, err := logicalDataTableNames(c)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range tables {
+		table, err := logicalSerializeTable(c, name)
 		if err != nil {
 			return nil, err
 		}
@@ -242,6 +244,59 @@ func logicalDeserializeStorageState(c *conn, state logicalSerializedStorageState
 
 func logicalSerializeSchema(c *conn) ([]logicalSerializedSchema, error) {
 	return logicalSchemaObjects(c)
+}
+
+func logicalDataTableNames(c *conn) ([]string, error) {
+	tables, err := logicalUserTableNames(c)
+	if err != nil {
+		return nil, err
+	}
+	hasRows, err := logicalSQLiteSequenceHasRows(c)
+	if err != nil {
+		return nil, err
+	}
+	if hasRows {
+		tables = append(tables, logicalSQLiteSequenceTable)
+	}
+	return tables, nil
+}
+
+func logicalSQLiteSequenceHasRows(c *conn) (bool, error) {
+	exists, err := logicalBackupTableExists(c, logicalSQLiteSequenceTable)
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, nil
+	}
+	rows, err := logicalBackupQuery(c, "SELECT COUNT(*) FROM sqlite_sequence")
+	if err != nil {
+		return false, err
+	}
+	if len(rows) != 1 || len(rows[0]) != 1 {
+		return false, fmt.Errorf("sqlite: sqlite_sequence count returned %d rows", len(rows))
+	}
+	count, ok := rows[0][0].(int64)
+	if !ok {
+		return false, fmt.Errorf("sqlite: sqlite_sequence count is %T", rows[0][0])
+	}
+	return count != 0, nil
+}
+
+func logicalUserTableNames(c *conn) ([]string, error) {
+	rows, err := logicalBackupQuery(c, "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY rowid")
+	if err != nil {
+		return nil, err
+	}
+	tables := make([]string, 0, len(rows))
+	for _, row := range rows {
+		name, ok := row[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("sqlite: logical table name is %T", row[0])
+		}
+		tables = append(tables, name)
+	}
+	return tables, nil
 }
 
 func logicalSchemaObjects(c *conn) ([]logicalSerializedSchema, error) {
@@ -455,6 +510,9 @@ func logicalDropRootFillers(c *conn, fillers map[int64]string) error {
 }
 
 func logicalSerializeTable(c *conn, name string) (logicalSerializedTable, error) {
+	if name == logicalSQLiteSequenceTable {
+		return logicalSerializeSQLiteSequence(c)
+	}
 	columns, rows, err := logicalSerializeQuery(c, "SELECT * FROM "+quoteIdent(name))
 	if err != nil {
 		return logicalSerializedTable{}, err
@@ -479,6 +537,26 @@ func logicalSerializeTable(c *conn, name string) (logicalSerializedTable, error)
 		table.RowidColumn = rowidColumn
 		rows = rowidRows
 	}
+	for _, row := range rows {
+		var serialized []logicalSerializedValue
+		for _, value := range row {
+			v, err := logicalValueFromDriver(value)
+			if err != nil {
+				return logicalSerializedTable{}, err
+			}
+			serialized = append(serialized, v)
+		}
+		table.Rows = append(table.Rows, serialized)
+	}
+	return table, nil
+}
+
+func logicalSerializeSQLiteSequence(c *conn) (logicalSerializedTable, error) {
+	columns, rows, err := logicalSerializeQuery(c, "SELECT name, seq FROM sqlite_sequence ORDER BY name")
+	if err != nil {
+		return logicalSerializedTable{}, err
+	}
+	table := logicalSerializedTable{Name: logicalSQLiteSequenceTable, Columns: columns}
 	for _, row := range rows {
 		var serialized []logicalSerializedValue
 		for _, value := range row {
@@ -558,6 +636,11 @@ func logicalHiddenRowidColumn(columns []string) string {
 }
 
 func logicalDeserializeTable(c *conn, table logicalSerializedTable) error {
+	if table.Name == logicalSQLiteSequenceTable {
+		if err := logicalBackupExec(c, "DELETE FROM sqlite_sequence"); err != nil {
+			return err
+		}
+	}
 	columns := table.Columns
 	if table.RowidColumn != "" {
 		columns = append([]string{table.RowidColumn}, columns...)
