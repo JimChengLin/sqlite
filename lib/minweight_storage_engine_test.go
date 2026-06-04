@@ -737,6 +737,34 @@ func TestMinweightCommitDetectsRangeReadConflict(t *testing.T) {
 	}
 }
 
+func TestMinweightCommitIgnoresChangeAfterSeekGEResult(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	if err := h.bt.store.Put(minweightTableKey(1, 70), []byte("base")); err != nil {
+		t.Fatal(err)
+	}
+	if rc, _ := h.bt.beginTrans(h.ctx, 1); rc != SQLITE_OK {
+		t.Fatalf("beginTrans rc = %d, want SQLITE_OK", rc)
+	}
+	row, ok, err := h.bt.seekTableGE(1, 50)
+	if err != nil || !ok || row.rowid != 70 {
+		t.Fatalf("seekTableGE row=%d ok=%v err=%v, want rowid 70", row.rowid, ok, err)
+	}
+	changedKey := minweightTableKey(1, 90)
+	h.bt.changes = append(h.bt.changes, minweightCommitChange{
+		generation: 2,
+		keys: map[string]minweightCommittedKeyChange{
+			string(changedKey): {key: changedKey},
+		},
+	})
+	h.bt.generation = 2
+	if err := h.bt.put(minweightTableKey(1, 100), []byte("own")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.bt.commitActiveWriteTxn(); err != nil {
+		t.Fatalf("commit with change after seek result: %v", err)
+	}
+}
+
 func TestMinweightCommitIgnoresUnrelatedRangeChange(t *testing.T) {
 	h := newMinweightBtreeTestHarness(t)
 	if rc, _ := h.bt.beginTrans(h.ctx, 1); rc != SQLITE_OK {
@@ -762,6 +790,63 @@ func TestMinweightCommitIgnoresUnrelatedRangeChange(t *testing.T) {
 	value, ok, err := h.bt.store.Get(minweightTableKey(1, 100))
 	if err != nil || !ok || !bytes.Equal(value, []byte("own")) {
 		t.Fatalf("committed value ok=%v value=%q err=%v, want own", ok, value, err)
+	}
+}
+
+func TestMinweightCommitDetectsChangeBetweenSeekLEResultAndTarget(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	if err := h.bt.store.Put(minweightTableKey(1, 30), []byte("base")); err != nil {
+		t.Fatal(err)
+	}
+	if rc, _ := h.bt.beginTrans(h.ctx, 1); rc != SQLITE_OK {
+		t.Fatalf("beginTrans rc = %d, want SQLITE_OK", rc)
+	}
+	row, ok, err := h.bt.seekTableLE(1, 50)
+	if err != nil || !ok || row.rowid != 30 {
+		t.Fatalf("seekTableLE row=%d ok=%v err=%v, want rowid 30", row.rowid, ok, err)
+	}
+	changedKey := minweightTableKey(1, 40)
+	h.bt.changes = append(h.bt.changes, minweightCommitChange{
+		generation: 2,
+		keys: map[string]minweightCommittedKeyChange{
+			string(changedKey): {key: changedKey},
+		},
+	})
+	h.bt.generation = 2
+	if err := h.bt.put(minweightTableKey(1, 100), []byte("own")); err != nil {
+		t.Fatal(err)
+	}
+	err = h.bt.commitActiveWriteTxn()
+	if !errors.Is(err, errMinweightTxnConflict) {
+		t.Fatalf("commit error = %v, want range read conflict", err)
+	}
+}
+
+func TestMinweightCommitIgnoresChangeBeforeSeekLEResult(t *testing.T) {
+	h := newMinweightBtreeTestHarness(t)
+	if err := h.bt.store.Put(minweightTableKey(1, 30), []byte("base")); err != nil {
+		t.Fatal(err)
+	}
+	if rc, _ := h.bt.beginTrans(h.ctx, 1); rc != SQLITE_OK {
+		t.Fatalf("beginTrans rc = %d, want SQLITE_OK", rc)
+	}
+	row, ok, err := h.bt.seekTableLE(1, 50)
+	if err != nil || !ok || row.rowid != 30 {
+		t.Fatalf("seekTableLE row=%d ok=%v err=%v, want rowid 30", row.rowid, ok, err)
+	}
+	changedKey := minweightTableKey(1, 10)
+	h.bt.changes = append(h.bt.changes, minweightCommitChange{
+		generation: 2,
+		keys: map[string]minweightCommittedKeyChange{
+			string(changedKey): {key: changedKey},
+		},
+	})
+	h.bt.generation = 2
+	if err := h.bt.put(minweightTableKey(1, 100), []byte("own")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.bt.commitActiveWriteTxn(); err != nil {
+		t.Fatalf("commit with change before seek result: %v", err)
 	}
 }
 
