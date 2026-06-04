@@ -143,7 +143,7 @@ value = SQLite index record bytes
 
 当前 `sqliteComparableKey` 底座已支持 SQLite record 的 NULL、INTEGER、REAL、TEXT、BLOB 存储类，以及 `BINARY`、`NOCASE`、`RTRIM`、DESC 排序。NaN 按 SQLite 比较语义编码为 NULL。`KEYINFO_ORDER_BIGNULL`、非 UTF-8 `KeyInfo`、没有 sort-key 能力的自定义 collation 会 fail fast，不能静默退回全表扫描作为正常路径。
 
-当前 non-int-key `BtreeFirst` / `BtreeLast` / `BtreeNext` / `BtreePrevious` 已经能对 versioned key 使用 `SeekGE` / `ReverseScanRange`，并 merge 当前 writer overlay。`BtreeIndexMoveto` 对 versioned root 也会从 `UnpackedRecord` / `TMem` 生成 sortable probe key，用 `SeekGE` 定位，再调用 `_sqlite3VdbeRecordCompare` 验证并返回 SQLite 期待的 compare result。旧 raw index key 仍走 materialized compatibility path；这个路径只能用于迁移期，不能成为长期正常路径。
+当前 non-int-key `BtreeFirst` / `BtreeLast` / `BtreeNext` / `BtreePrevious` 已经能对 versioned key 使用 `SeekGE` / `ReverseScanRange`，并 merge 当前 writer overlay。`BtreeIndexMoveto` 也会从 `UnpackedRecord` / `TMem` 生成 sortable probe key，用 `SeekGE` 定位，再调用 `_sqlite3VdbeRecordCompare` 验证并返回 SQLite 期待的 compare result。未发布的旧 raw index key 格式不再兼容，遇到时按 corrupt/fail-fast 处理。
 
 ## Cursor 读路径
 
@@ -156,8 +156,7 @@ value = SQLite index record bytes
 当前读操作大致如下：
 
 - `BtreeFirst` / `BtreeLast` / `BtreeTableMoveto` 以及普通 `BtreeNext` / `BtreePrevious` 已经使用 seek/range API。
-- versioned-root `BtreeIndexMoveto` 使用 sortable probe key 和 `SeekGE`，并 merge 当前 writer overlay。
-- legacy raw index root 的 `BtreeIndexMoveto` 仍从 minweight store 扫描当前 root prefix，这是迁移期兼容路径。
+- `BtreeIndexMoveto` 使用 sortable probe key 和 `SeekGE`，并 merge 当前 writer overlay。
 - int-key table 按 rowid 排序。
 - `BtreeIndexMoveto` 的最终 compare result 仍来自 SQLite record comparator，避免 adapter 自己重新定义 SQLite record 比较语义。
 - `BtreePayload` / `BtreePayloadFetch` 把当前 row 的 payload 写回 SQLite 期待的内存位置。
@@ -231,11 +230,11 @@ shared-cache 锁：
 当前模型能覆盖单连接 rollback、savepoint rollback、statement rollback、基本多连接 committed-view 可见性、部分 shared-cache 锁和 busy 行为。但它仍有明确问题：
 
 - 显式长读事务还没有稳定 read view；在上面的 generation pin 模型落地前，不支持长事务。
-- legacy raw index key 的 cursor 仍 materialize root，再用 SQLite comparator 排序/定位。
-- legacy raw index key 的 path-backed store 迁移策略还没定；在 cursor 依赖物理 byte order 前必须处理。
+- raw index key 旧格式已经不支持；open/stat recompute、fallback row loading 和 integrity check 会把它视为 corrupt，而不是隐藏地 materialize。
+- 仍有少数 versioned root fallback 会 materialize rows，例如兼容性 cursor restore、backup/copy-style whole-root 流程和部分统计/检查路径。
 - WAL 只能等 stable read view 后做逻辑事务模式，不能假装有 SQLite WAL frame。
 
-因此下一步不是补 pager/VFS/dbpage shim，而是把 read/write set validation、in-memory generation pin、legacy raw key 策略和剩余 whole-root rewrite 补上。
+因此下一步不是补 pager/VFS/dbpage shim，而是把 read/write set validation、in-memory generation pin 和剩余 whole-root rewrite 补上。
 
 ### 后续方向：adapter transaction view，不要求 minweight_store MVCC
 
@@ -283,10 +282,10 @@ WAL 语义不是 pager hook，而是 transaction view 的策略变化。只有�
 3. 已完成：修复 sqlite3* 复用后的 stale engine binding。连接关闭会清理 db-level binding；旧连接仍通过已经打开的 btree/cursor handle dispatch，新连接不会继承旧 engine 的 db alias。
 4. 已完成：transaction overlay + WriteBatch commit。写入口写 per-writer delta 和 working metadata；commit phase two 用 `minweight.Store.WriteBatch` 批量落到 committed store；rollback/savepoint/statement rollback 恢复或丢弃 overlay，不再扫描/重放整库。
 5. adapter view 接口：读路径已经不再用 writer whole-store snapshot 隐藏未提交写；int-key table cursor movement、versioned non-int-key sequential movement、versioned-root `BtreeIndexMoveto` 已经只依赖 `Get`/`SeekGE`/`SeekLE`/`ReverseScanRange` 和 overlay。下一步要把剩余 snapshot read path 换成 generation pin + read/write set validation；显式长读事务先不支持。
-6. 部分完成：seek cursor。int-key table cursor 的 `First`/`Last`/`TableMoveto`/`Next`/`Previous` 已经从 materialized root rows 迁到 `SeekGE`/`SeekLE`；non-int-key 顺序 cursor movement 已经迁到 versioned key 的 `SeekGE`/`ReverseScanRange` 并 merge overlay；versioned-root `BtreeIndexMoveto` 已经迁到 sortable probe `SeekGE`。legacy raw index root 仍会 materialize。
+6. 部分完成：seek cursor / root maintenance。int-key table cursor 的 `First`/`Last`/`TableMoveto`/`Next`/`Previous` 已经从 materialized root rows 迁到 `SeekGE`/`SeekLE`；non-int-key 顺序 cursor movement 已经迁到 versioned key 的 `SeekGE`/`ReverseScanRange` 并 merge overlay；`BtreeIndexMoveto` 已经迁到 sortable probe `SeekGE`；int-key 和 versioned non-int-key `clearRoot`/`moveRoot` 也已经用 seek 迭代维护 root。raw index key 旧格式已删除兼容路径。
 7. 已完成底座：`sqliteComparableKey` 为 index / WITHOUT ROWID btree 生成 versioned physical key。内置存储类、内置 collation 和 DESC 先支持；无法编码的自定义 collation、BIGNULL 和非 UTF-8 KeyInfo fail fast。
 8. 部分完成：optimistic transaction view。当前已有 committed generation、短 reader-view pin、旧 generation key-change retention/prune、writer point read set、root-level range read set、commit 冲突校验和 direct adapter tests。还缺 byte-range read set、SQL statement/cursor 生命周期 pin、冲突 busy-handler 集成，以及把普通读可见性从 transaction-start snapshot 完整迁到 generation view。显式长读事务在这个能力完整前 fail fast 或保持 rollback-journal busy 语义。
-9. legacy raw key 策略：versioned-root `BtreeIndexMoveto` 已经基于 `sqliteComparableKey` probe `SeekGE`；旧 raw key root 必须补迁移或 fail-fast 策略，不能静默退回成长期常规路径。
+9. 已完成：raw index key 策略。这个项目还没有发布，所以不保留旧 raw key 兼容；新写入始终使用 versioned `sqliteComparableKey`，旧 raw key 直接 fail fast。
 10. 在 transaction view 之后再做 WAL 逻辑模式：`PRAGMA journal_mode=WAL` 只改变 reader/writer commit policy 和 view 生命周期，不创建真实 WAL frame。没有稳定旧 view 时返回 delete 或 unsupported。
 11. 最后补逻辑 backup/serialize、constraints/triggers/incremental blob 和 shared-cache 边界测试；page-image、VFS、mmap、dbpage 继续留在低优先级 shim。
 
@@ -390,6 +389,6 @@ TEST_PARALLEL=8 ./test-storage-engine.sh
 
 目前已经完成的是：SQLite btree API 可以 dispatch 到 minweight，handle 绑定不再依赖进程级全局开关，path-backed database 会真实打开 minweight_store 目录并在最后一个 handle 关闭时 `Store.Close()`，逻辑 metadata 也会随 store 持久化；competing writer 和 open statement reader 会让 writer 返回 `SQLITE_BUSY`，busy handler 可等待 active writer 释放，不会覆盖 active writer 或漏出失败 commit 的写集；index/WITHOUT ROWID 新写入已经使用 versioned `sqliteComparableKey` 物理 key，value 保留原始 SQLite record；non-int-key sequential cursor movement 和 versioned-root `BtreeIndexMoveto` 已经用 seek/range API。
 
-目前没有完成的是：legacy raw index root 迁移/fail-fast 策略、byte-range read set 和 SQL 生命周期级 generation pin、完整 reader/writer lock protocol、物理 page file、真实 WAL、mmap、writable VFS，以及完整 `sqlite_dbpage` 页面模型。
+目前没有完成的是：byte-range read set 和 SQL 生命周期级 generation pin、完整 reader/writer lock protocol、`BtreeCopyFile` 等 whole-root copy/check 流程的 range/batch 维护、物理 page file、真实 WAL、mmap、writable VFS，以及完整 `sqlite_dbpage` 页面模型。
 
-下一步如果目标是“行为对齐 btree”，第一优先级转为 optimistic transaction view 和 legacy raw index root 策略：versioned 新写入路径已经能 seek，剩下要避免旧 raw key path 继续作为隐藏的全 root materialization 正常路径，并把剩余 snapshot 隔离改成 generation pin + read/write set validation。
+下一步如果目标是“行为对齐 btree”，第一优先级转为 optimistic transaction view 和剩余 whole-root fallback：versioned 新写入路径已经能 seek，raw key 旧格式已经 fail fast，剩下要把剩余 snapshot 隔离改成 generation pin + read/write set validation，并继续把 copy/check 类路径换成 range/batch。
