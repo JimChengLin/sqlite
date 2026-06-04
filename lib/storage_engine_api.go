@@ -207,20 +207,26 @@ var currentStorageEngine atomic.Value
 var storageEngineSwitchMu sync.Mutex
 var storageEngineDispatch storageEngineDispatcher
 var storageEngineBinding = storageEngineBindings{
-	btrees:  map[uintptr]StorageEngine{},
-	cursors: map[uintptr]StorageEngine{},
-	dbs:     map[uintptr]StorageEngine{},
-	btreeDB: map[uintptr]uintptr{},
-	dbRefs:  map[uintptr]int{},
+	btrees:  map[uintptr]storageEngineBtreeBinding{},
+	cursors: map[uintptr]uintptr{},
+	dbs:     map[uintptr]storageEngineDBBinding{},
 }
 
 type storageEngineBindings struct {
 	mu      sync.RWMutex
-	btrees  map[uintptr]StorageEngine
-	cursors map[uintptr]StorageEngine
-	dbs     map[uintptr]StorageEngine
-	btreeDB map[uintptr]uintptr
-	dbRefs  map[uintptr]int
+	btrees  map[uintptr]storageEngineBtreeBinding
+	cursors map[uintptr]uintptr
+	dbs     map[uintptr]storageEngineDBBinding
+}
+
+type storageEngineBtreeBinding struct {
+	engine StorageEngine
+	db     uintptr
+}
+
+type storageEngineDBBinding struct {
+	engine StorageEngine
+	refs   int
 }
 
 type storageEngineDispatcher struct{}
@@ -240,10 +246,10 @@ func storageEngineForDB(db SQLiteHandle) StorageEngine {
 		return selectedStorageEngine()
 	}
 	storageEngineBinding.mu.RLock()
-	engine := storageEngineBinding.dbs[db.ptr]
+	binding := storageEngineBinding.dbs[db.ptr]
 	storageEngineBinding.mu.RUnlock()
-	if engine != nil {
-		return engine
+	if binding.engine != nil {
+		return binding.engine
 	}
 	return selectedStorageEngine()
 }
@@ -253,10 +259,10 @@ func storageEngineForBtreeHandle(p BtreeHandle) StorageEngine {
 		return selectedStorageEngine()
 	}
 	storageEngineBinding.mu.RLock()
-	engine := storageEngineBinding.btrees[p.ptr]
+	binding := storageEngineBinding.btrees[p.ptr]
 	storageEngineBinding.mu.RUnlock()
-	if engine != nil {
-		return engine
+	if binding.engine != nil {
+		return binding.engine
 	}
 	return selectedStorageEngine()
 }
@@ -270,14 +276,14 @@ func storageEngineForCursorHandle(pCur BtreeCursorHandle) StorageEngine {
 		return selectedStorageEngine()
 	}
 	storageEngineBinding.mu.RLock()
-	engine := storageEngineBinding.cursors[pCur.ptr]
+	pBtree := storageEngineBinding.cursors[pCur.ptr]
 	storageEngineBinding.mu.RUnlock()
-	if engine != nil {
-		return engine
-	}
-	pBtree := storageEngineBtCursorFromPointer(pCur.ptr).FpBtree
 	if pBtree != 0 {
 		return storageEngineForBtreeHandle(btreeHandle(pCur.tls, pBtree))
+	}
+	rawBtree := storageEngineBtCursorFromPointer(pCur.ptr).FpBtree
+	if rawBtree != 0 {
+		return storageEngineForBtreeHandle(btreeHandle(pCur.tls, rawBtree))
 	}
 	return selectedStorageEngine()
 }
@@ -285,14 +291,14 @@ func storageEngineForCursorHandle(pCur BtreeCursorHandle) StorageEngine {
 func storageEngineForCursorOrDB(pCur BtreeCursorHandle, db SQLiteHandle) StorageEngine {
 	if pCur.ptr != 0 {
 		storageEngineBinding.mu.RLock()
-		engine := storageEngineBinding.cursors[pCur.ptr]
+		pBtree := storageEngineBinding.cursors[pCur.ptr]
 		storageEngineBinding.mu.RUnlock()
-		if engine != nil {
-			return engine
-		}
-		pBtree := storageEngineBtCursorFromPointer(pCur.ptr).FpBtree
 		if pBtree != 0 {
 			return storageEngineForBtreeHandle(btreeHandle(pCur.tls, pBtree))
+		}
+		rawBtree := storageEngineBtCursorFromPointer(pCur.ptr).FpBtree
+		if rawBtree != 0 {
+			return storageEngineForBtreeHandle(btreeHandle(pCur.tls, rawBtree))
 		}
 	}
 	return storageEngineForDB(db)
@@ -303,13 +309,17 @@ func registerStorageEngineBtree(p BtreeHandle, db SQLiteHandle, engine StorageEn
 		return
 	}
 	storageEngineBinding.mu.Lock()
-	storageEngineBinding.btrees[p.ptr] = engine
+	storageEngineBinding.btrees[p.ptr] = storageEngineBtreeBinding{
+		engine: engine,
+		db:     db.ptr,
+	}
 	if db.ptr != 0 {
-		if storageEngineBinding.dbs[db.ptr] == nil {
-			storageEngineBinding.dbs[db.ptr] = engine
+		binding := storageEngineBinding.dbs[db.ptr]
+		if binding.engine == nil {
+			binding.engine = engine
 		}
-		storageEngineBinding.btreeDB[p.ptr] = db.ptr
-		storageEngineBinding.dbRefs[db.ptr]++
+		binding.refs++
+		storageEngineBinding.dbs[db.ptr] = binding
 	}
 	storageEngineBinding.mu.Unlock()
 }
@@ -319,16 +329,15 @@ func unregisterStorageEngineBtree(p BtreeHandle) {
 		return
 	}
 	storageEngineBinding.mu.Lock()
+	binding := storageEngineBinding.btrees[p.ptr]
 	delete(storageEngineBinding.btrees, p.ptr)
-	db := storageEngineBinding.btreeDB[p.ptr]
-	delete(storageEngineBinding.btreeDB, p.ptr)
-	if db != 0 {
-		refs := storageEngineBinding.dbRefs[db] - 1
-		if refs <= 0 {
-			delete(storageEngineBinding.dbRefs, db)
-			delete(storageEngineBinding.dbs, db)
+	if binding.db != 0 {
+		dbBinding := storageEngineBinding.dbs[binding.db]
+		dbBinding.refs--
+		if dbBinding.refs <= 0 {
+			delete(storageEngineBinding.dbs, binding.db)
 		} else {
-			storageEngineBinding.dbRefs[db] = refs
+			storageEngineBinding.dbs[binding.db] = dbBinding
 		}
 	}
 	storageEngineBinding.mu.Unlock()
@@ -340,21 +349,21 @@ func unregisterStorageEngineDB(db SQLiteHandle) {
 	}
 	storageEngineBinding.mu.Lock()
 	delete(storageEngineBinding.dbs, db.ptr)
-	delete(storageEngineBinding.dbRefs, db.ptr)
-	for btree, btreeDB := range storageEngineBinding.btreeDB {
-		if btreeDB == db.ptr {
-			delete(storageEngineBinding.btreeDB, btree)
+	for btree, binding := range storageEngineBinding.btrees {
+		if binding.db == db.ptr {
+			binding.db = 0
+			storageEngineBinding.btrees[btree] = binding
 		}
 	}
 	storageEngineBinding.mu.Unlock()
 }
 
-func registerStorageEngineCursor(pCur BtreeCursorHandle, engine StorageEngine) {
-	if pCur.ptr == 0 {
+func registerStorageEngineCursor(pCur BtreeCursorHandle, p BtreeHandle) {
+	if pCur.ptr == 0 || p.ptr == 0 {
 		return
 	}
 	storageEngineBinding.mu.Lock()
-	storageEngineBinding.cursors[pCur.ptr] = engine
+	storageEngineBinding.cursors[pCur.ptr] = p.ptr
 	storageEngineBinding.mu.Unlock()
 }
 

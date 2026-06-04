@@ -58,6 +58,8 @@ minweight 不直接使用 SQLite btree 指针作为真实对象，而是在 `min
 - `dbs map[string]*minweightDatabase`，用于缓存当前 engine 已打开的 path-backed minweight store，并用 refcount 管理生命周期
 - `cursors map[uintptr]*minweightCursor`
 
+storage-engine dispatcher 自己也维护一个更薄的 handle graph：`btree -> {engine, sqlite3*}`、`cursor -> btree`、`sqlite3* -> {engine, refs}`。这样 cursor 不直接保存 engine，db-level 调用通过 sqlite3* binding 找 engine，cursor 调用通过 btree binding 找 engine；全局 `SetStorageEngine` 只影响尚未绑定的新 open。
+
 因此对 minweight 来说，`uintptr` 是 handle/token；`tls` 主要用于满足 SQLite ABI 的内存读写、C string、fake pager/file 等场景。
 
 需要特别注意：db-level 调用如 logical backup metadata 只能把 `sqlite3*` 当 connection handle 查找当前 main btree，不能把它当稳定对象地址长期持有。连接关闭时必须删除 sqlite3* -> engine/db alias；btree/cursor 生命周期仍由各自 handle close 管理。

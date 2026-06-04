@@ -351,7 +351,7 @@ func (storageEngineDispatcher) BtreeCursor(ctx BtreeContext, p BtreeHandle, iTab
 	engine := storageEngineForBtreeHandle(p)
 	r = engine.BtreeCursor(ctx, p, iTable, wrFlag, pKeyInfo, pCur)
 	if r == SQLITE_OK {
-		registerStorageEngineCursor(pCur, engine)
+		registerStorageEngineCursor(pCur, p)
 	}
 	return r
 }
